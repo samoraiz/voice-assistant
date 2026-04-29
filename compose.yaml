@@ -1,0 +1,251 @@
+services:
+  hailo-ollama:
+    container_name: hailo-ollama
+    image: hailo-ollama:5.3.0
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - /usr/local/share/hailo-ollama:/usr/local/share/hailo-ollama
+    devices:
+      - /dev/h1x-0:/dev/h1x-0
+    group_add:
+      - "0"
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_KEEP_ALIVE=-1
+      - HAILO_OLLAMA_VDEVICE_GROUP_ID=SHARED
+      - XDG_DATA_HOME=/usr/local/share
+  homeassistant:
+    container_name: homeassistant
+    image: "ghcr.io/home-assistant/home-assistant:2026.4.4"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - /home/ctf/homeassistant/config:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
+    restart: unless-stopped
+    network_mode: host
+  mqtt:
+    container_name: mqtt
+    image: eclipse-mosquitto:2.1.2-alpine
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    ports:
+      - "1883:1883"
+    #network_mode: host
+    privileged: true
+
+  zigbee2mqtt:
+    container_name: zigbee2mqtt
+    image: ghcr.io/koenkk/zigbee2mqtt:2.9.2
+    restart: unless-stopped
+    volumes:
+      - ./z2m/data:/app/data
+      - /run/udev:/run/udev:ro
+    ports:
+      - "8080:8080"
+    #network_mode: host
+    environment:
+      - TZ=America/Los_Angeles
+    devices:
+      - /dev/serial/by-id/usb-Silicon_Labs_CP2105_Dual_USB_to_UART_Bridge_Controller_0160A9D8-if00-port0:/dev/ttyUSB0
+    depends_on:
+      - mqtt
+
+  zwave-js-ui:
+    container_name: zwave-js-ui
+    image: zwavejs/zwave-js-ui:11.16.1
+    restart: unless-stopped
+    tty: true
+    stop_signal: SIGINT
+    environment:
+      - SESSION_SECRET=YeXxULDQLFQer9HnqRiYxvEqrbHmT3GpbhxwTehs9q8=
+      - TZ=America/Los_Angeles
+    devices:
+      # Use the if01 port for Z-Wave
+      - /dev/serial/by-id/usb-Silicon_Labs_CP2105_Dual_USB_to_UART_Bridge_Controller_0160A9D8-if01-port0:/dev/zwave
+    volumes:
+      - ./zwave-js-ui:/usr/src/app/store
+    ports:
+      - "8091:8091" # Web UI
+      - "3000:3000" # Z-Wave JS Server for Home Assistant
+
+  ring-mqtt:
+    container_name: ring-mqtt
+    image: tsightler/ring-mqtt:5.9.3
+    restart: unless-stopped
+    environment:
+      - MQTTHOST=mqtt  # Use your MQTT service name
+      - MQTTPORT=1883
+      #- MQTTUSER=your_user
+      #- MQTTPASS=your_password
+      - RINGTOKEN= # You will generate this via the container's web UI
+    volumes:
+      - ./ring-mqtt-data:/data
+
+  matter-hub:
+    image: ghcr.io/riddix/home-assistant-matter-hub:2.0.42
+    container_name: matter-hub
+    restart: unless-stopped
+    network_mode: host # Critical for mDNS and Matter discovery
+    environment:
+      - HAMH_HOME_ASSISTANT_URL=http://localhost:8123
+      - HAMH_HOME_ASSISTANT_ACCESS_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJiMzUzMTgzNzNhMTA0NTY0YTRjOGYwYmY0ZjE4NmFiMSIsImlhdCI6MTc3MzY0MzQ5MywiZXhwIjoyMDg5MDAzNDkzfQ.ctwCi4H7BpZAQRtyG0bDUcLybcSCO7wlwHgfybdYVG4
+    volumes:
+      - ./matter-hub:/data
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:0.8.12
+    container_name: open-webui
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - OLLAMA_BASE_URL=http://localhost:11434
+      - WEBUI_AUTH=False
+      - PORT=4000
+
+  #whisper:
+  #  container_name: wyoming-whisper
+  #  image: rhasspy/wyoming-whisper:3.1.0
+  #  # tiny.en, tiny, base.en, base, small.en, small, medium.en, medium, large-v1, large-v2, large-v3, large, distil-large-v2, distil-medium.en, distil-small.en, distil-large-v3, distil-large-v3.5, large-v3-turbo, turbo
+  #  command: --model distil-small.en --language en --debug
+  #  #command: --model Systran/faster-distil-whisper-small.en --language en
+  #  volumes:
+  #    - ./whisper-data:/data
+  #  environment:
+  #    - TZ=America/Los_Angeles
+  #  ports:
+  #    - "10300:10300"
+  #  restart: unless-stopped
+
+  hailo-whisper:
+    container_name: hailo-whisper
+    image: canthefason/wyoming-whisper:latest
+    environment:
+      - HAILO_VDEVICE_GROUP_ID=SHARED
+      - HAILO_OLLAMA_VDEVICE_GROUP_ID=SHARED
+    devices:
+      - /dev/h1x-0:/dev/h1x-0
+    volumes:
+      - /usr/lib/aarch64-linux-gnu/libusb-1.0.so.0:/usr/lib/aarch64-linux-gnu/libusb-1.0.so.0:ro
+    ports:
+      - "10300:10300"
+    restart: unless-stopped
+
+  # Text-to-Speech (TTS)
+  piper:
+    container_name: wyoming-piper
+    image: rhasspy/wyoming-piper:2.2.2
+    command: --voice en_US-lessac-medium
+    volumes:
+      - ./piper-data:/data
+    environment:
+      - TZ=America/Los_Angeles
+    ports:
+      - "10200:10200"
+    restart: unless-stopped
+
+  esphome:
+    container_name: esphome
+    image: ghcr.io/esphome/esphome:2026.4.2
+    volumes:
+      - ./config:/config:rw
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+    privileged: true # Required for USB passthrough (initial flashing)
+    network_mode: host
+    environment:
+      - USERNAME=admin # Optional: Dashboard credentials
+      - PASSWORD=123456
+
+  #carconnectivity-mqtt:
+  #  container_name: carconnectivity
+  #  image: tillsteinbach/carconnectivity-mqtt:0.10.2
+  #  environment:
+  #    - CONFIG_FILE=/data/carconnectivity.json
+  #    - ADDITIONAL_INSTALLS=carconnectivity-plugin-mqtt_homeassistant carconnectivity-connector-volkswagen-na
+  #  volumes:
+  #    - ./carconnectivity:/data
+  #    - ../carconnect:/opt/netrc:ro
+  #  restart: unless-stopped
+  #  depends_on:
+  #    - mqtt
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:2.2.1
+    container_name: uptime-kuma
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./kuma:/app/data
+      # Allows Kuma to monitor other containers on your Pi 5
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.3.0
+    container_name: cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token eyJhIjoiYzExNzA2NjllYzc2YTBjMTgyODg5ZDg1NzUzM2YxMzYiLCJ0IjoiMjZlNTMzMzEtOWQ1MS00N2ViLTgxMzktYmQ2ZTM1Y2YxMTMyIiwicyI6IlkyUXdPV0l4TWpZdFlXUmhNaTAwTURsa0xXRXpPVE10TXpZM1lUTm1ZMlV6TW1ReSJ9
+
+  alloy:
+    image: grafana/alloy:v1.15.0
+    container_name: grafana-alloy
+    user: "0:0"
+    restart: unless-stopped
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /:/host:ro,rslave                        # for prometheus.exporter.unix
+      - /var/run/docker.sock:/var/run/docker.sock  # for loki.source.docker (logs)
+    entrypoint:
+      - /bin/alloy
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    network_mode: host # Simplest for host monitoring
+    pid: host          # Required to see host processes
+    privileged: true
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.53.0
+    container_name: cadvisor
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+    ports:
+      - "8081:8080"   # 8080 is already taken by zigbee2mqtt
+
+  pypowerwall-server:
+    image: jasonacox/pypowerwall-server:0.2.2
+    container_name: pypowerwall-server
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - PW_HOST=192.168.91.1
+      - PW_GW_PWD=MCVEGNJLDS
+
+volumes:
+  hailo_ollama_models:
+  ollama_data:

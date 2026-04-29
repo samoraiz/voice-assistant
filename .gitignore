@@ -1,0 +1,21 @@
+# Logs
+*.log
+install-hailo-ollama-npu.log
+install.log
+upgrade-service.log
+
+# Version reports (auto-generated, not useful as reference)
+docker-compose-version-report-*.md
+
+# Summary files (internal notes)
+01-SUMMARY.md
+02-SUMMARY.md
+
+# TODO (personal scratchpad)
+TODO.md
+
+# Blog post (publish separately)
+hailo-ollama-blog-post.md
+
+# macOS
+.DS_Store
