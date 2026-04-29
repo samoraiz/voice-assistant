@@ -19,6 +19,14 @@
 #
 # Output is tee'd to install-hailo-ollama-npu.log in this directory
 # so Claude can read it and suggest fixes if something goes wrong.
+#
+# Override defaults with environment variables:
+#   RPI_HOST        — SSH alias or hostname                  (default: rpi.local)
+#   RPI_USER        — Pi username                            (default: pi)
+#   HA_DIR          — HA compose dir on Pi (absolute path)   (default: /home/<user>/homeassistant)
+#   GENAI_REPO_DIR  — hailo_model_zoo_genai path on Pi       (default: /home/<user>/hailo_model_zoo_genai)
+#   DOCKER_BUILD_DIR— Docker build context dir on Pi         (default: /home/<user>/hailo-ollama-docker)
+#   HAILO_MODEL     — NPU model to use                       (default: qwen2.5:1.5b)
 # ============================================================
 set -euo pipefail
 
@@ -31,12 +39,14 @@ echo "=== $(date '+%Y-%m-%d %H:%M:%S') — 02-install-hailo-ollama-npu.sh starte
 echo ""
 
 SSH_ALIAS="${RPI_HOST:-rpi.local}"
+RPI_USER="${RPI_USER:-pi}"
+HA_DIR="${HA_DIR:-/home/${RPI_USER}/homeassistant}"
 HAILO_VERSION="5.3.0"
-GENAI_REPO_DIR="/home/ctf/hailo_model_zoo_genai"
+GENAI_REPO_DIR="${GENAI_REPO_DIR:-/home/${RPI_USER}/hailo_model_zoo_genai}"
 HAILO_OLLAMA_BIN="/usr/local/bin/hailo-ollama"
 HAILO_OLLAMA_PORT=11434
-COMPOSE_FILE="/home/ctf/homeassistant/compose.yaml"
-DOCKER_BUILD_DIR="/home/ctf/hailo-ollama-docker"
+COMPOSE_FILE="${HA_DIR}/compose.yaml"
+DOCKER_BUILD_DIR="${DOCKER_BUILD_DIR:-/home/${RPI_USER}/hailo-ollama-docker}"
 IMAGE_TAG="hailo-ollama:${HAILO_VERSION}"
 
 # Model to load on the Hailo-10H NPU.
@@ -61,7 +71,7 @@ confirm() {
 }
 
 pi() {
-    ssh "ctf@$SSH_ALIAS" "bash -l -s" <<< "$@"
+    ssh "${RPI_USER}@${SSH_ALIAS}" "bash -l -s" <<< "$@"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -226,7 +236,7 @@ STOP_OUT=$(pi "
 
   # Also stop any existing hailo-ollama container so it frees port 11434
   # (Step 6 will re-create it with the updated image)
-  cd ~/homeassistant
+  cd ${HA_DIR}
   docker compose stop hailo-ollama 2>/dev/null || true
   docker compose rm -f hailo-ollama 2>/dev/null || true
   echo 'OLLAMA_STOPPED'
@@ -831,10 +841,10 @@ UP_OUT=$(pi "
   # hailo-ollama (with XDG_DATA_HOME=/usr/local/share) stores blobs in models/blob/ (singular).
   sudo mkdir -p /usr/local/share/hailo-ollama/models/manifests/hailo-ollama
   sudo mkdir -p /usr/local/share/hailo-ollama/models/blob
-  sudo chown -R ctf:ctf /usr/local/share/hailo-ollama/models/manifests/hailo-ollama
-  sudo chown -R ctf:ctf /usr/local/share/hailo-ollama/models/blob
+  sudo chown -R ${RPI_USER}:${RPI_USER} /usr/local/share/hailo-ollama/models/manifests/hailo-ollama
+  sudo chown -R ${RPI_USER}:${RPI_USER} /usr/local/share/hailo-ollama/models/blob
   echo '  Host model dirs: ready'
-  cd ~/homeassistant
+  cd ${HA_DIR}
 
   # Restart any service that shares /dev/h1x-0 with hailo-ollama so it
   # picks up the new HAILO_VDEVICE_GROUP_ID before hailo-ollama starts.
@@ -947,7 +957,7 @@ MODEL_OUT=$(pi "
   # hailo-ollama creates the HailoRT VDevice lazily on the first real request (pull/generate).
   # If hailo-whisper holds /dev/h1x-0 exclusively, hailo-ollama crashes instantly on pull.
   # Stop hailo-whisper before pulling to give hailo-ollama exclusive NPU access.
-  cd ~/homeassistant
+  cd ${HA_DIR}
   echo '  Stopping hailo-whisper temporarily (NPU needed for pull)...'
   docker compose stop hailo-whisper 2>&1 | tail -3 || true
   sleep 2
@@ -1092,7 +1102,7 @@ HA_OUT=$(pi "
   # Patch the Extended OpenAI Conversation model name in HA's config entry store.
   # The 01-install script may have set it to llama3.2:3b (CPU ollama model).
   # hailo-ollama only knows 'voice-assistant', so update it.
-  STORAGE=~/homeassistant/config/.storage/core.config_entries
+  STORAGE=${HA_DIR}/config/.storage/core.config_entries
   if [ -f \"\$STORAGE\" ]; then
     CURRENT_MODEL=\$(sudo python3 -c \"
 import json

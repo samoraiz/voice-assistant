@@ -46,7 +46,7 @@ Everything runs locally. No cloud APIs. No subscriptions.
 
 ## Related
 
-- Blog post: [How We Reduced LLM Inference Latency by Running Ollama on Hailo AI HAT+2](#)
+- Blog post: [How We Reduced LLM Inference Latency by Running Ollama on Hailo AI HAT+2](https://github.com/canthefason/hailo-voice-assistant)
 - Hardware: Raspberry Pi 5 8GB + [Hailo AI HAT+2](https://www.raspberrypi.com/products/ai-hat/) + [Waveshare ESP32-S3 AI Smart Speaker](https://www.waveshare.com)
 
 ## Status

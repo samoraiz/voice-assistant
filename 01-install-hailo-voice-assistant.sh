@@ -12,10 +12,19 @@
 #  Home Assistant  — Wyoming integration (auto-discovers STT/TTS services)
 #
 # Run from your Mac:  bash 01-install-hailo-voice-assistant.sh
+#
+# Override defaults with environment variables:
+#   RPI_HOST              — SSH alias or hostname     (default: rpi.local)
+#   RPI_USER              — Pi username               (default: pi)
+#   HA_DIR                — HA compose dir on Pi      (default: /home/<user>/homeassistant)
+#   HAILO_WHISPER_IMAGE   — Docker image for Whisper  (default: canthefason/hailo-whisper)
 # ============================================================
 set -euo pipefail
 
 SSH_ALIAS="${RPI_HOST:-rpi.local}"
+RPI_USER="${RPI_USER:-pi}"
+HA_DIR="${HA_DIR:-/home/${RPI_USER}/homeassistant}"
+HAILO_WHISPER_IMAGE="${HAILO_WHISPER_IMAGE:-canthefason/hailo-whisper}"
 HAILO_VERSION="5.3.0"
 WYOMING_STT_PORT=10300
 INSTALL_DIR="/opt/voice-assistant"
@@ -246,7 +255,7 @@ header "STEP 3 — Whisper STT (Hailo NPU encoder + Wyoming server)"
 #     bring it up and health-check the Wyoming STT port.
 
 # Path on the Pi — evaluated remotely, not on the Mac
-COMPOSE_FILE='~/homeassistant/compose.yaml'
+COMPOSE_FILE="${HA_DIR}/compose.yaml"
 
 info "Reading existing compose file on Pi..."
 pi "cat $COMPOSE_FILE" || die "Cannot read $COMPOSE_FILE on Pi."
@@ -275,7 +284,7 @@ pi "
     cat << EOF >> $COMPOSE_FILE
 
   hailo-whisper:
-    image: canthefason/hailo-whisper
+    image: ${HAILO_WHISPER_IMAGE}
     container_name: hailo-whisper
     restart: unless-stopped
     devices:
@@ -345,11 +354,11 @@ info "Checking hailo-whisper image..."
 pi "
   set -e
   # Use the locally cached image if present; only pull if missing
-  if docker images -q canthefason/wyoming-whisper 2>/dev/null | grep -q .; then
+  if docker images -q ${HAILO_WHISPER_IMAGE} 2>/dev/null | grep -q .; then
     echo '  Image already present locally — skipping pull.'
   else
     echo '  Image not found locally — pulling...'
-    cd ~/homeassistant && docker compose pull hailo-whisper \
+    cd ${HA_DIR} && docker compose pull hailo-whisper \
       || { echo '  ✘  Pull failed and no local image exists'; exit 1; }
   fi
   echo 'PULL_OK'
@@ -358,7 +367,7 @@ ok "hailo-whisper image: ready"
 
 info "Starting hailo-whisper container..."
 pi "
-  cd ~/homeassistant
+  cd ${HA_DIR}
   docker compose up -d hailo-whisper
   sleep 4
   docker compose ps hailo-whisper
@@ -489,7 +498,7 @@ pi "
   python3 << 'PYEOF'
 import re, os, sys
 
-path = os.path.expanduser('~/homeassistant/compose.yaml')
+path = os.path.expanduser('${HA_DIR}/compose.yaml')
 with open(path) as f:
     content = f.read()
 
@@ -553,7 +562,7 @@ ok "open-webui: host network configured"
 
 info "Restarting open-webui with new network config..."
 pi "
-  cd ~/homeassistant
+  cd ${HA_DIR}
   docker compose up -d --force-recreate open-webui
   sleep 3
   docker inspect open-webui --format 'open-webui state: {{.State.Status}}' 2>/dev/null || true
@@ -567,7 +576,7 @@ pi "
   python3 << 'PYEOF'
 import re, os
 
-path = os.path.expanduser('~/homeassistant/compose.yaml')
+path = os.path.expanduser('${HA_DIR}/compose.yaml')
 with open(path) as f:
     content = f.read()
 
@@ -635,7 +644,7 @@ ok "Ollama compose config: correct"
 
 info "Starting ollama container..."
 pi "
-  cd ~/homeassistant
+  cd ${HA_DIR}
   docker compose pull ollama 2>/dev/null || true
   docker compose up -d ollama
   sleep 5
@@ -780,7 +789,7 @@ header "STEP 7 — Extended OpenAI Conversation (Ollama + HA device control)"
 info "Installing extended_openai_conversation custom component..."
 EOCA_OUT=""; EOCA_RC=0
 EOCA_OUT=$(pi "
-  CUSTOM_DIR=~/homeassistant/config/custom_components
+  CUSTOM_DIR=${HA_DIR}/config/custom_components
   EOCA_DIR=\$CUSTOM_DIR/extended_openai_conversation
   # HA config dir is written by the container (root-owned) — use sudo
   sudo mkdir -p \$CUSTOM_DIR
@@ -833,7 +842,7 @@ ok "extended_openai_conversation: installed in config/custom_components/"
 info "Restarting Home Assistant to load the new custom component..."
 HA_OUT=""; HA_RC=0
 HA_OUT=$(pi "
-  cd ~/homeassistant
+  cd ${HA_DIR}
   docker compose restart homeassistant 2>&1
   echo 'HA_RESTARTING'
 ") || HA_RC=$?
@@ -875,7 +884,7 @@ pi "
 
   echo ''
   echo '[2/3] Wyoming Whisper container (STT)...'
-  cd ~/homeassistant
+  cd ${HA_DIR}
   STATUS=\$(docker compose ps hailo-whisper --format json 2>/dev/null \
     | python3 -c \"import json,sys; d=json.load(sys.stdin); print(d[0]['State'])\" 2>/dev/null \
     || docker inspect hailo-whisper --format '{{.State.Status}}' 2>/dev/null \
@@ -921,8 +930,8 @@ warn "If /dev/h1x* shows 'permission denied', run: sudo reboot"
 warn "After reboot your user will be in the 'hailo' group."
 echo ""
 echo -e "${CYAN}  Service management:${NC}"
-echo -e "  ssh hailo-pi 'docker logs hailo-whisper -f'       # Whisper STT logs"
-echo -e "  ssh hailo-pi 'docker logs ollama -f'              # Ollama LLM logs"
-echo -e "  ssh hailo-pi 'docker logs wyoming-piper -f'       # Piper TTS logs"
-echo -e "  ssh hailo-pi 'cd ~/homeassistant && docker compose ps'  # all containers"
+echo -e "  ssh ${SSH_ALIAS} 'docker logs hailo-whisper -f'       # Whisper STT logs"
+echo -e "  ssh ${SSH_ALIAS} 'docker logs ollama -f'              # Ollama LLM logs"
+echo -e "  ssh ${SSH_ALIAS} 'docker logs wyoming-piper -f'       # Piper TTS logs"
+echo -e "  ssh ${SSH_ALIAS} 'cd ${HA_DIR} && docker compose ps'  # all containers"
 echo ""

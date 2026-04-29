@@ -22,6 +22,12 @@
 # Usage:
 #   bash 03-upgrade-service.sh                  # interactive menu
 #   bash 03-upgrade-service.sh hailo-whisper    # upgrade specific service
+#
+# Override defaults with environment variables:
+#   RPI_HOST              — SSH alias or hostname     (default: rpi.local)
+#   RPI_USER              — Pi username               (default: pi)
+#   HA_DIR                — HA compose dir on Pi      (default: /home/<user>/homeassistant)
+#   HAILO_WHISPER_IMAGE   — Docker image for Whisper  (default: canthefason/hailo-whisper)
 # ============================================================
 set -euo pipefail
 
@@ -32,7 +38,10 @@ echo ""
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') — 03-upgrade-service.sh started ==="
 
 SSH_ALIAS="${RPI_HOST:-rpi.local}"
-COMPOSE_FILE="/home/ctf/homeassistant/compose.yaml"
+RPI_USER="${RPI_USER:-pi}"
+HA_DIR="${HA_DIR:-/home/${RPI_USER}/homeassistant}"
+HAILO_WHISPER_IMAGE="${HAILO_WHISPER_IMAGE:-canthefason/hailo-whisper}"
+COMPOSE_FILE="${HA_DIR}/compose.yaml"
 HAILO_VERSION="5.3.0"   # current baseline; override with --hailo-version X.Y.Z
 
 # ── Colours ──────────────────────────────────────────────────────────────────
@@ -98,7 +107,7 @@ restore_compose() {
 upgrade_hailo_whisper() {
     local target_tag="${1:-latest}"
 
-    header "Upgrade: hailo-whisper → canthefason/hailo-whisper:${target_tag}"
+    header "Upgrade: hailo-whisper → ${HAILO_WHISPER_IMAGE}:${target_tag}"
 
     # ── Current version ────────────────────────────────────────────────────
     info "Current hailo-whisper image state:"
@@ -115,15 +124,15 @@ upgrade_hailo_whisper() {
     # ── Save rollback tag ──────────────────────────────────────────────────
     info "Tagging current image for rollback..."
     pi "
-      CUR_IMAGE=\$(docker inspect hailo-whisper --format '{{.Config.Image}}' 2>/dev/null || echo 'canthefason/hailo-whisper:latest')
-      docker tag \"\$CUR_IMAGE\" canthefason/hailo-whisper:rollback 2>/dev/null && echo ROLLBACK_TAG_OK || echo 'No existing image to tag (first install?)'
+      CUR_IMAGE=\$(docker inspect hailo-whisper --format '{{.Config.Image}}' 2>/dev/null || echo '${HAILO_WHISPER_IMAGE}:latest')
+      docker tag \"\$CUR_IMAGE\" ${HAILO_WHISPER_IMAGE}:rollback 2>/dev/null && echo ROLLBACK_TAG_OK || echo 'No existing image to tag (first install?)'
     " || true
 
     # ── Pull ───────────────────────────────────────────────────────────────
-    info "Pulling canthefason/hailo-whisper:${target_tag}..."
+    info "Pulling ${HAILO_WHISPER_IMAGE}:${target_tag}..."
     pi "
       set -e
-      docker pull canthefason/hailo-whisper:${target_tag}
+      docker pull ${HAILO_WHISPER_IMAGE}:${target_tag}
       echo PULL_OK
     " | grep PULL_OK || die "docker pull failed for hailo-whisper:${target_tag}"
 
@@ -132,7 +141,7 @@ upgrade_hailo_whisper() {
         info "Pinning image tag to ${target_tag} in compose.yaml..."
         backup_compose
         pi "
-          sed -i 's|image: canthefason/hailo-whisper.*|image: canthefason/hailo-whisper:${target_tag}|' ${COMPOSE_FILE}
+          sed -i 's|image: ${HAILO_WHISPER_IMAGE}.*|image: ${HAILO_WHISPER_IMAGE}:${target_tag}|' ${COMPOSE_FILE}
           echo COMPOSE_PINNED
         " | grep COMPOSE_PINNED || die "Failed to pin image tag in compose.yaml"
     fi
@@ -140,7 +149,7 @@ upgrade_hailo_whisper() {
     # ── Restart ────────────────────────────────────────────────────────────
     info "Restarting hailo-whisper..."
     pi "
-      cd ~/homeassistant
+      cd ${HA_DIR}
       docker compose up -d --force-recreate hailo-whisper 2>&1 | tail -5
       echo RESTART_OK
     " | grep RESTART_OK || die "docker compose up failed for hailo-whisper"
@@ -185,8 +194,8 @@ rollback_hailo_whisper() {
     header "Rollback: hailo-whisper"
     info "Switching back to :rollback tag..."
     pi "
-      docker tag canthefason/hailo-whisper:rollback canthefason/hailo-whisper:latest 2>/dev/null || true
-      cd ~/homeassistant
+      docker tag ${HAILO_WHISPER_IMAGE}:rollback ${HAILO_WHISPER_IMAGE}:latest 2>/dev/null || true
+      cd ${HA_DIR}
       docker compose up -d --force-recreate hailo-whisper 2>&1 | tail -5
       echo ROLLBACK_OK
     " | grep ROLLBACK_OK && ok "Rollback applied" || warn "Rollback had issues — check manually"
@@ -225,7 +234,7 @@ upgrade_hailo_ollama_image() {
     # ── Stop container so the build context can be refreshed ──────────────
     info "Stopping hailo-ollama container..."
     pi "
-      cd ~/homeassistant
+      cd ${HA_DIR}
       docker compose stop hailo-ollama 2>/dev/null || true
       docker compose rm -f hailo-ollama 2>/dev/null || true
       echo STOPPED_OK
@@ -238,7 +247,7 @@ upgrade_hailo_ollama_image() {
     local build_rc=0
     pi "
       set -e
-      DOCKER_BUILD_DIR='/home/ctf/hailo-ollama-docker'
+      DOCKER_BUILD_DIR="/home/${RPI_USER}/hailo-ollama-docker"
       HAILO_OLLAMA_BIN='/usr/local/bin/hailo-ollama'
       IMAGE_TAG='hailo-ollama:${HAILO_VERSION}'
 
@@ -437,7 +446,7 @@ DEOF
     info "Starting hailo-ollama with new image..."
     pi "
       set -e
-      cd ~/homeassistant
+      cd ${HA_DIR}
       docker compose up -d hailo-ollama 2>&1 | tail -5
       echo COMPOSE_UP_OK
     " | grep COMPOSE_UP_OK || die "docker compose up failed for hailo-ollama"
@@ -502,10 +511,10 @@ verify_hailo_ollama() {
 rollback_hailo_ollama() {
     header "Rollback: hailo-ollama"
     info "Stopping container..."
-    pi "cd ~/homeassistant && docker compose stop hailo-ollama 2>/dev/null || true && docker compose rm -f hailo-ollama 2>/dev/null || true"
+    pi "cd ${HA_DIR} && docker compose stop hailo-ollama 2>/dev/null || true && docker compose rm -f hailo-ollama 2>/dev/null || true"
     info "Restoring :rollback image..."
     pi "docker tag hailo-ollama:rollback hailo-ollama:${HAILO_VERSION} 2>/dev/null && echo ROLLBACK_TAG_OK || echo 'No rollback image available'" || true
-    pi "cd ~/homeassistant && docker compose up -d hailo-ollama 2>&1 | tail -5"
+    pi "cd ${HA_DIR} && docker compose up -d hailo-ollama 2>&1 | tail -5"
     restore_compose
     ok "Rollback applied — run verify to confirm"
 }
@@ -560,7 +569,7 @@ upgrade_hailo_ollama_full() {
     # ── Stop containers that use the NPU ──────────────────────────────────
     info "Stopping Hailo containers (NPU must be free for dpkg)..."
     pi "
-      cd ~/homeassistant
+      cd ${HA_DIR}
       docker compose stop hailo-ollama hailo-whisper 2>/dev/null || true
       docker compose rm -f hailo-ollama 2>/dev/null || true
       echo CONTAINERS_STOPPED
@@ -597,7 +606,7 @@ upgrade_hailo_ollama_full() {
     local build_rc=0
     pi "
       set -e
-      GENAI_REPO=/home/ctf/hailo_model_zoo_genai
+      GENAI_REPO=/home/${RPI_USER}/hailo_model_zoo_genai
       [ -d \$GENAI_REPO ] || { echo 'ERROR: \$GENAI_REPO not found'; exit 1; }
       cd \$GENAI_REPO
       git fetch --tags 2>&1 | tail -3
@@ -694,7 +703,7 @@ PYEOF
 
     info "Restarting piper container..."
     pi "
-      cd ~/homeassistant
+      cd ${HA_DIR}
       docker compose up -d --force-recreate ${piper_container} 2>&1 | tail -5
       echo RESTART_OK
     " | grep RESTART_OK || die "docker compose up failed for piper"
@@ -748,7 +757,7 @@ rollback_piper() {
       ORIG_IMG=\$(docker inspect ${container} --format '{{.Config.Image}}' 2>/dev/null || echo 'rhasspy/wyoming-piper:latest')
       BASE=\${ORIG_IMG%%:*}
       docker tag piper-rollback:saved \"\$ORIG_IMG\" 2>/dev/null || true
-      cd ~/homeassistant
+      cd ${HA_DIR}
       docker compose up -d --force-recreate ${container} 2>&1 | tail -5
       echo ROLLBACK_OK
     " | grep ROLLBACK_OK && ok "Rollback applied" || warn "Rollback issues — check manually"
@@ -815,7 +824,7 @@ PYEOF
     # ── Restart ────────────────────────────────────────────────────────────
     info "Restarting Home Assistant..."
     pi "
-      cd ~/homeassistant
+      cd ${HA_DIR}
       docker compose up -d --force-recreate homeassistant 2>&1 | tail -5
       echo RESTART_OK
     " | grep RESTART_OK || die "docker compose up failed for homeassistant"
@@ -863,7 +872,7 @@ rollback_homeassistant() {
     header "Rollback: Home Assistant"
     pi "
       docker tag homeassistant:rollback \$(docker inspect homeassistant --format '{{.Config.Image}}' 2>/dev/null || echo 'ghcr.io/home-assistant/home-assistant:stable') 2>/dev/null || true
-      cd ~/homeassistant
+      cd ${HA_DIR}
       docker compose up -d --force-recreate homeassistant 2>&1 | tail -5
       echo ROLLBACK_OK
     " | grep ROLLBACK_OK && ok "Rollback applied" || warn "Rollback issues — check manually"
@@ -877,11 +886,11 @@ upgrade_extended_openai() {
     local target_tag="${1:-}"   # empty = latest
     header "Upgrade: extended_openai_conversation"
 
-    local eoca_dir="$HOME/homeassistant/config/custom_components/extended_openai_conversation"
+    local eoca_dir="${HA_DIR}/config/custom_components/extended_openai_conversation"
 
     info "Current version:"
     pi "
-      EOCA_DIR=~/homeassistant/config/custom_components/extended_openai_conversation
+      EOCA_DIR=${HA_DIR}/config/custom_components/extended_openai_conversation
       if sudo test -f \"\$EOCA_DIR/manifest.json\" 2>/dev/null; then
         VER=\$(sudo python3 -c \"import json; print(json.load(open('\$EOCA_DIR/manifest.json'))['version'])\" 2>/dev/null || echo unknown)
         echo \"  Installed version: v\$VER\"
@@ -911,7 +920,7 @@ upgrade_extended_openai() {
     # ── Backup current install ─────────────────────────────────────────────
     info "Backing up current custom component..."
     pi "
-      EOCA_DIR=~/homeassistant/config/custom_components/extended_openai_conversation
+      EOCA_DIR=${HA_DIR}/config/custom_components/extended_openai_conversation
       if sudo test -d \"\$EOCA_DIR\" 2>/dev/null; then
         sudo cp -r \"\$EOCA_DIR\" \"\${EOCA_DIR}.upgrade-bak\" 2>/dev/null
         echo '  Backed up to extended_openai_conversation.upgrade-bak'
@@ -946,7 +955,7 @@ print(assets[0] if assets else '')
       [ -n \"\$MANIFEST\" ] || { echo 'ERROR: manifest.json not found in zip'; exit 1; }
       INTEGRATION_DIR=\$(dirname \"\$MANIFEST\")
 
-      CUSTOM_DIR=~/homeassistant/config/custom_components
+      CUSTOM_DIR=${HA_DIR}/config/custom_components
       EOCA_DIR=\$CUSTOM_DIR/extended_openai_conversation
 
       sudo mkdir -p \"\$CUSTOM_DIR\"
@@ -962,7 +971,7 @@ print(assets[0] if assets else '')
     # ── Restart HA to pick up the new component ────────────────────────────
     info "Restarting Home Assistant to load new component..."
     pi "
-      cd ~/homeassistant
+      cd ${HA_DIR}
       docker compose restart homeassistant 2>&1 | tail -3
       echo HA_RESTARTING
     " | grep HA_RESTARTING || warn "HA restart had issues"
@@ -988,7 +997,7 @@ verify_extended_openai() {
 
     info "Checking installed version..."
     pi "
-      EOCA_DIR=~/homeassistant/config/custom_components/extended_openai_conversation
+      EOCA_DIR=${HA_DIR}/config/custom_components/extended_openai_conversation
       VER=\$(sudo python3 -c \"import json; print(json.load(open('\$EOCA_DIR/manifest.json'))['version'])\" 2>/dev/null || echo unknown)
       echo \"  Installed: v\$VER\"
     " || true
@@ -1007,7 +1016,7 @@ verify_extended_openai() {
 rollback_extended_openai() {
     header "Rollback: extended_openai_conversation"
     pi "
-      EOCA_DIR=~/homeassistant/config/custom_components/extended_openai_conversation
+      EOCA_DIR=${HA_DIR}/config/custom_components/extended_openai_conversation
       if sudo test -d \"\${EOCA_DIR}.upgrade-bak\" 2>/dev/null; then
         sudo rm -rf \"\$EOCA_DIR\"
         sudo cp -r \"\${EOCA_DIR}.upgrade-bak\" \"\$EOCA_DIR\"
@@ -1015,7 +1024,7 @@ rollback_extended_openai() {
       else
         echo '  No backup found — cannot rollback'
       fi
-      cd ~/homeassistant
+      cd ${HA_DIR}
       docker compose restart homeassistant 2>&1 | tail -3
       echo ROLLBACK_DONE
     " | grep ROLLBACK_DONE && ok "Rollback applied" || warn "Rollback issues — check manually"
@@ -1099,7 +1108,7 @@ print('  Pinned: ${cur_image} -> ${new_image}')
     # ── Restart via compose ───────────────────────────────────────────────
     info "Restarting ${compose_svc}..."
     pi "
-      cd ~/homeassistant
+      cd ${HA_DIR}
       docker compose up -d --force-recreate ${compose_svc} 2>&1 | tail -5
       echo RESTART_OK
     " | grep RESTART_OK || die "docker compose up failed for ${compose_svc}"
@@ -1148,7 +1157,7 @@ rollback_standard_service() {
     pi "
       CUR_IMG=\$(docker inspect ${container} --format '{{.Config.Image}}' 2>/dev/null || echo unknown)
       docker tag '${container}-rollback:saved' \"\$CUR_IMG\" 2>/dev/null || true
-      cd ~/homeassistant
+      cd ${HA_DIR}
       docker compose up -d --force-recreate ${compose_svc} 2>&1 | tail -5
       echo ROLLBACK_OK
     " | grep ROLLBACK_OK && ok "Rollback applied" || warn "Rollback issues — check manually"
@@ -1183,7 +1192,7 @@ upgrade_open_webui() {
     local backup_rc=0
     pi "
       TIMESTAMP=\$(date +%Y%m%d_%H%M%S)
-      BACKUP_DIR=~/homeassistant/backups
+      BACKUP_DIR=${HA_DIR}/backups
       mkdir -p \"\$BACKUP_DIR\"
       # Data is stored in open-webui Docker volume — copy via a temp container
       if docker volume inspect open-webui 2>/dev/null | grep -q 'open-webui'; then
@@ -1306,7 +1315,7 @@ v0.47.2\"
 
     info "Restarting cadvisor..."
     pi "
-      cd ~/homeassistant
+      cd ${HA_DIR}
       docker compose up -d --force-recreate cadvisor 2>&1 | tail -5
       echo RESTART_OK
     " | grep RESTART_OK || die "docker compose up failed for cadvisor"
@@ -1316,7 +1325,7 @@ rollback_cadvisor() {
     header "Rollback: cAdvisor"
     pi "
       docker tag cadvisor-rollback:saved \$(docker inspect cadvisor --format '{{.Config.Image}}' 2>/dev/null || echo 'ghcr.io/google/cadvisor:rollback') 2>/dev/null || true
-      cd ~/homeassistant
+      cd ${HA_DIR}
       docker compose up -d --force-recreate cadvisor 2>&1 | tail -5
       echo ROLLBACK_OK
     " | grep ROLLBACK_OK && ok "Rollback applied" || warn "Rollback issues — check manually"

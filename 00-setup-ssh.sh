@@ -3,13 +3,19 @@
 # 00-setup-ssh.sh — Configure SSH access to the Hailo Pi
 # Run this once on your Mac before anything else.
 # Usage: bash 00-setup-ssh.sh
+#
+# Override defaults with environment variables:
+#   RPI_HOST   — Pi hostname or IP       (default: rpi.local)
+#   RPI_USER   — Pi username             (default: pi)
+#   RPI_ALIAS  — SSH config alias        (default: hailo-pi)
+#   SSH_KEY    — Path to SSH private key (default: ~/.ssh/id_ed25519)
 # ============================================================
 set -euo pipefail
 
 HOST="${RPI_HOST:-rpi.local}"
-USER="ctf"
-ALIAS="hailo-pi"
-KEY="$HOME/.ssh/id_ed25519"
+USER="${RPI_USER:-pi}"
+ALIAS="${RPI_ALIAS:-hailo-pi}"
+KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519}"
 SSH_CONFIG="$HOME/.ssh/config"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
