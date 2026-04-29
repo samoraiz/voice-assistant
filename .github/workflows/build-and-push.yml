@@ -1,0 +1,217 @@
+# ============================================================
+# build-and-push.yml
+# Build and push the hailo-whisper Docker image.
+#
+# Runs on a self-hosted runner on the Raspberry Pi 5 because:
+#   - The image is aarch64-only (no QEMU cross-build support for hailo_platform)
+#   - The HailoRT Python wheel and encoder HEF must be present on the host
+#
+# Setup (one-time, on the Pi):
+#   1. Install the GitHub Actions runner:
+#        mkdir -p ~/actions-runner && cd ~/actions-runner
+#        curl -Lo runner.tar.gz https://github.com/actions/runner/releases/download/v2.322.0/actions-runner-linux-arm64-2.322.0.tar.gz
+#        tar xzf runner.tar.gz
+#        ./config.sh --url https://github.com/<owner>/<repo> --token <TOKEN> --labels hailo
+#        sudo ./svc.sh install && sudo ./svc.sh start
+#   2. Add secrets in GitHub → Settings → Secrets:
+#        DOCKERHUB_USERNAME  — Docker Hub username
+#        DOCKERHUB_TOKEN     — Docker Hub access token (read/write)
+# ============================================================
+name: Build and Push hailo-whisper
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+    paths:
+      - 'Dockerfile'
+      - 'wyoming_hailo_whisper/**'
+      - 'build-image.sh'
+      - '.github/workflows/build-and-push.yml'
+
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'wyoming_hailo_whisper/**'
+
+  workflow_dispatch:
+    inputs:
+      whisper_model:
+        description: 'Whisper model (tiny.en / small.en / base.en)'
+        required: false
+        default: 'small.en'
+      image_tag:
+        description: 'Docker image tag'
+        required: false
+        default: 'latest'
+      push_image:
+        description: 'Push image to Docker Hub'
+        type: boolean
+        default: true
+
+env:
+  IMAGE_NAME: ${{ vars.DOCKERHUB_IMAGE_NAME || 'canthefason/hailo-whisper' }}
+  HAILO_VERSION: '5.3.0'
+
+jobs:
+  build:
+    name: Build hailo-whisper image
+    # Self-hosted runner on the Pi — must have Docker, the HailoRT wheel, and the HEF.
+    runs-on: [self-hosted, linux, arm64, hailo]
+    timeout-minutes: 60
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── 2. Determine image tag and model ─────────────────────────────────────
+      - name: Determine build parameters
+        id: params
+        run: |
+          # Tag: use input, or git tag, or short SHA
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.image_tag }}" ]]; then
+            TAG="${{ inputs.image_tag }}"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="$(git rev-parse --short HEAD)"
+          fi
+
+          # Model: use input or default
+          MODEL="${{ inputs.whisper_model || 'small.en' }}"
+
+          # Derive HEF filename from model: small.en → whisper_small_en_encoder.hef
+          MODEL_SLUG=$(echo "$MODEL" | tr '.' '_')
+          HEF="whisper_${MODEL_SLUG}_encoder.hef"
+
+          # Push: yes on main/tags, or if explicitly requested
+          PUSH=false
+          if [[ "${{ github.event_name }}" == "push" && \
+                ( "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == refs/tags/* ) ]]; then
+            PUSH=true
+          fi
+          if [[ "${{ inputs.push_image }}" == "true" ]]; then
+            PUSH=true
+          fi
+          # Never push on pull_request
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            PUSH=false
+          fi
+
+          echo "tag=${TAG}"              >> "$GITHUB_OUTPUT"
+          echo "model=${MODEL}"          >> "$GITHUB_OUTPUT"
+          echo "hef=${HEF}"             >> "$GITHUB_OUTPUT"
+          echo "push=${PUSH}"           >> "$GITHUB_OUTPUT"
+          echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Show build parameters
+        run: |
+          echo "Image  : ${{ env.IMAGE_NAME }}:${{ steps.params.outputs.tag }}"
+          echo "Model  : ${{ steps.params.outputs.model }}"
+          echo "HEF    : ${{ steps.params.outputs.hef }}"
+          echo "Push   : ${{ steps.params.outputs.push }}"
+
+      # ── 3. Locate build artifacts ────────────────────────────────────────────
+      - name: Locate HailoRT wheel on runner
+        id: wheel
+        run: |
+          WHL=$(find /usr/lib/hailo* /usr/share/hailo* $HOME -maxdepth 4 \
+                    -name "hailo_platform*${{ env.HAILO_VERSION }}*.whl" \
+                    -o -name "hailort*${{ env.HAILO_VERSION }}*cp311*.whl" \
+                    2>/dev/null | head -1 || true)
+          # Fallback: any hailo_platform wheel
+          if [[ -z "$WHL" ]]; then
+            WHL=$(find /usr/lib /usr/share $HOME -maxdepth 4 \
+                      -name "hailo_platform*.whl" 2>/dev/null | head -1 || true)
+          fi
+          [[ -n "$WHL" ]] || { echo "ERROR: HailoRT Python wheel not found on runner"; exit 1; }
+          echo "path=${WHL}" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename $WHL)" >> "$GITHUB_OUTPUT"
+          echo "Found wheel: $WHL"
+
+      - name: Locate encoder HEF on runner
+        id: hef
+        run: |
+          HEF_NAME="${{ steps.params.outputs.hef }}"
+          HEF_PATH=$(find $HOME /opt /usr/local/share -name "$HEF_NAME" 2>/dev/null | head -1 || true)
+          [[ -n "$HEF_PATH" ]] || { echo "ERROR: $HEF_NAME not found on runner"; exit 1; }
+          echo "path=${HEF_PATH}" >> "$GITHUB_OUTPUT"
+          echo "Found HEF: $HEF_PATH"
+
+      # ── 4. Stage build context ───────────────────────────────────────────────
+      - name: Stage build context
+        run: |
+          BUILD_DIR="$(mktemp -d)"
+          echo "BUILD_DIR=${BUILD_DIR}" >> "$GITHUB_ENV"
+
+          # Copy build artifacts alongside source
+          cp "${{ steps.wheel.outputs.path }}" "${BUILD_DIR}/${{ steps.wheel.outputs.name }}"
+          cp "${{ steps.hef.outputs.path }}"   "${BUILD_DIR}/${{ steps.params.outputs.hef }}"
+          cp Dockerfile                        "${BUILD_DIR}/"
+          cp -r wyoming_hailo_whisper/         "${BUILD_DIR}/"
+
+          echo "Build context contents:"
+          ls -lh "${BUILD_DIR}"
+
+      # ── 5. Docker Hub login (only when pushing) ───────────────────────────────
+      - name: Log in to Docker Hub
+        if: steps.params.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # ── 6. Build ─────────────────────────────────────────────────────────────
+      - name: Build Docker image
+        run: |
+          docker build \
+            --build-arg HAILORT_WHL="${{ steps.wheel.outputs.name }}" \
+            --build-arg HEF="${{ steps.params.outputs.hef }}" \
+            --build-arg WHISPER_MODEL="${{ steps.params.outputs.model }}" \
+            -t "${{ env.IMAGE_NAME }}:${{ steps.params.outputs.tag }}" \
+            -t "${{ env.IMAGE_NAME }}:${{ steps.params.outputs.short_sha }}" \
+            "${{ env.BUILD_DIR }}"
+
+      # ── 7. Smoke test ────────────────────────────────────────────────────────
+      - name: Smoke test — verify image metadata
+        run: |
+          docker inspect "${{ env.IMAGE_NAME }}:${{ steps.params.outputs.tag }}" \
+            --format 'Entrypoint: {{json .Config.Entrypoint}}  Cmd: {{json .Config.Cmd}}'
+          # Verify the model weights are baked in (check layer sizes)
+          docker history "${{ env.IMAGE_NAME }}:${{ steps.params.outputs.tag }}" \
+            --no-trunc --format '{{.Size}} {{.CreatedBy}}' \
+            | grep -i whisper || true
+
+      # ── 8. Push ──────────────────────────────────────────────────────────────
+      - name: Push to Docker Hub
+        if: steps.params.outputs.push == 'true'
+        run: |
+          docker push "${{ env.IMAGE_NAME }}:${{ steps.params.outputs.tag }}"
+          docker push "${{ env.IMAGE_NAME }}:${{ steps.params.outputs.short_sha }}"
+          # Also push :latest when building from main or a version tag
+          if [[ "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == refs/tags/v* ]]; then
+            docker tag "${{ env.IMAGE_NAME }}:${{ steps.params.outputs.tag }}" \
+                       "${{ env.IMAGE_NAME }}:latest"
+            docker push "${{ env.IMAGE_NAME }}:latest"
+          fi
+
+      # ── 9. Cleanup ───────────────────────────────────────────────────────────
+      - name: Cleanup build context
+        if: always()
+        run: rm -rf "${{ env.BUILD_DIR }}" || true
+
+      # ── 10. Summary ──────────────────────────────────────────────────────────
+      - name: Job summary
+        run: |
+          echo "## hailo-whisper build" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image | \`${{ env.IMAGE_NAME }}:${{ steps.params.outputs.tag }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Model | \`${{ steps.params.outputs.model }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| HEF | \`${{ steps.params.outputs.hef }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Pushed | ${{ steps.params.outputs.push }} |" >> "$GITHUB_STEP_SUMMARY"
