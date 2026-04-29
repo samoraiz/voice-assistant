@@ -26,17 +26,15 @@
 #     DOCKERHUB_TOKEN      Docker Hub access token (read/write)
 #
 #   Variables (Settings → Variables → Actions):
-#     HAILO_ARTIFACTS_URL  Base URL for HEF files (no trailing slash).
-#                          HEF filename (e.g. whisper_small_en_encoder.hef) is appended.
-#                          e.g. https://github.com/<org>/<repo>/releases/download/hailo-artifacts-5.3.0
+#     WHISPER_VERSION      Hailo model package version for CDN downloads.
+#                          HEF files are fetched from:
+#                            https://dev-public.hailo.ai/v<WHISPER_VERSION>/blob/Whisper-<Size>.hef
+#                          e.g. set to "2.2.0" to fetch Whisper-Small.hef from v2.2.0
 #     DOCKERHUB_IMAGE_NAME Optional: override default image name (canthefason/hailo-whisper)
 #
-# Uploading artifacts to GitHub Releases (one-time):
-#   gh release create hailo-artifacts-5.3.0 \
-#     hailort-5.3.0-cp311-cp311-linux_aarch64.whl \
-#     whisper_small_en_encoder.hef \
-#     whisper_tiny_en_encoder.hef \
-#     --repo <owner>/<repo> --title "Hailo artifacts v5.3.0" --notes "Build artifacts"
+# Finding the right WHISPER_VERSION:
+#   Browse https://dev-public.hailo.ai/ to find the version that contains the
+#   HEF file for your model (Whisper-Small.hef, Whisper-Tiny.hef, Whisper-Base.hef).
 # ============================================================
 name: Build and Push hailo-whisper
 
@@ -106,9 +104,13 @@ jobs:
           fi
 
           # ── HEF filename — derived from model name ──
-          # small.en → whisper_small_en_encoder.hef
+          # small.en → whisper_small_en_encoder.hef (local name passed to Dockerfile)
+          # small.en → Whisper-Small (CDN title used for download URL)
           MODEL_SLUG=$(echo "$MODEL" | tr '.' '_')
           HEF="whisper_${MODEL_SLUG}_encoder.hef"
+          # Capitalize first segment: small → Small, tiny → Tiny, base → Base
+          MODEL_SIZE=$(echo "$MODEL" | cut -d'.' -f1)
+          HEF_TITLE="Whisper-${MODEL_SIZE^}"
 
           # ── Push decision ──
           PUSH=false
@@ -125,17 +127,19 @@ jobs:
 
           SHORT_SHA=$(git rev-parse --short HEAD)
 
-          echo "model=${MODEL}"         >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG}"             >> "$GITHUB_OUTPUT"
-          echo "hef=${HEF}"            >> "$GITHUB_OUTPUT"
-          echo "push=${PUSH}"          >> "$GITHUB_OUTPUT"
-          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "model=${MODEL}"           >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}"               >> "$GITHUB_OUTPUT"
+          echo "hef=${HEF}"              >> "$GITHUB_OUTPUT"
+          echo "hef_title=${HEF_TITLE}"  >> "$GITHUB_OUTPUT"
+          echo "push=${PUSH}"            >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}"  >> "$GITHUB_OUTPUT"
 
           echo "──────────────────────────────────────"
-          echo "  Image : ${{ env.IMAGE_NAME }}:${TAG}"
-          echo "  Model : ${MODEL}"
-          echo "  HEF   : ${HEF}"
-          echo "  Push  : ${PUSH}"
+          echo "  Image     : ${{ env.IMAGE_NAME }}:${TAG}"
+          echo "  Model     : ${MODEL}"
+          echo "  HEF (local): ${HEF}"
+          echo "  HEF (CDN) : ${HEF_TITLE}.hef"
+          echo "  Push      : ${PUSH}"
           echo "──────────────────────────────────────"
 
       # ── 3. QEMU — enable arm64 emulation on the amd64 runner ─────────────────
@@ -163,21 +167,25 @@ jobs:
           curl -fsSL -o "hailort.whl" "${{ secrets.HAILORT_WHL_URL }}"
           echo "  Downloaded: $(du -sh hailort.whl | cut -f1)"
 
-      # ── 6. Download encoder HEF ───────────────────────────────────────────────
+      # ── 6. Download encoder HEF from Hailo public CDN ────────────────────────
+      # URL pattern: https://dev-public.hailo.ai/v<WHISPER_VERSION>/blob/Whisper-<Size>.hef
+      # The file is saved locally under the Dockerfile's expected name so the
+      # build-arg HEF= path lines up with the COPY instruction.
       - name: Download encoder HEF
         run: |
-          BASE_URL="${{ vars.HAILO_ARTIFACTS_URL }}"
           HEF="${{ steps.params.outputs.hef }}"
+          HEF_TITLE="${{ steps.params.outputs.hef_title }}"
+          VERSION="${{ vars.WHISPER_VERSION }}"
 
-          if [[ -z "$BASE_URL" ]]; then
-            echo "::error::Variable HAILO_ARTIFACTS_URL is not set."
-            echo "Set it to the base URL where HEF files are hosted"
-            echo "(e.g. https://github.com/<owner>/<repo>/releases/download/<tag>)"
+          if [[ -z "$VERSION" ]]; then
+            echo "::error::Variable WHISPER_VERSION is not set."
+            echo "Set it to the Hailo model package version that contains the HEF files."
+            echo "Browse https://dev-public.hailo.ai/ to find the right version."
             exit 1
           fi
 
-          HEF_URL="${BASE_URL}/${HEF}"
-          echo "Downloading ${HEF} from ${HEF_URL}..."
+          HEF_URL="https://dev-public.hailo.ai/v${VERSION}/blob/${HEF_TITLE}.hef"
+          echo "Downloading ${HEF_TITLE}.hef from Hailo CDN (v${VERSION})..."
           curl -fsSL -o "${HEF}" "${HEF_URL}"
           echo "  Downloaded: $(du -sh "${HEF}" | cut -f1)"
 
