@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 wyoming-hailo-whisper — Wyoming STT server
-  Encoder: Hailo NPU (whisper_small_en_encoder.hef)
+  Encoder: Hailo NPU (whisper_tiny_en_encoder.hef)
   Decoder: CPU via openai-whisper
   Protocol: Wyoming (port 10300)
 
 Usage:
   python3 -m wyoming_hailo_whisper \
-    --hef /opt/whisper/encoder.hef \
-    --model small.en \
+    --hef /opt/voice-assistant/whisper/whisper_tiny_en_encoder.hef \
+    --model tiny.en \
     --uri tcp://0.0.0.0:10300
 """
 import argparse
@@ -34,8 +34,8 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="small.en",
-        help="Whisper model name for decoder (default: small.en)",
+        default="tiny.en",
+        help="Whisper model name for decoder (default: tiny.en)",
     )
     parser.add_argument(
         "--uri",

@@ -45,12 +45,11 @@ class HailoWhisperCore:
     def __init__(
         self,
         hef_path: str,
-        model_name: str = "small.en",
+        model_name: str = "tiny.en",
         language: str = "en",
         device_id: int = 0,
     ):
         self.hef_path = str(hef_path)
-        self.model_name = model_name
         self.language = language
         self.device_id = device_id
 
