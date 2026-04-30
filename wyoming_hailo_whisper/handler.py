@@ -14,27 +14,33 @@ from .core import HailoWhisperCore
 
 _LOGGER = logging.getLogger(__name__)
 
-_INFO = Info(
-    asr=[
-        AsrProgram(
-            name="wyoming-hailo-whisper",
-            description="Whisper STT accelerated by Hailo NPU",
-            attribution=Attribution(name="hailo-ai", url="https://hailo.ai"),
-            installed=True,
-            version="1.0.0",
-            models=[
-                AsrModel(
-                    name="tiny.en",
-                    description="Whisper tiny (English), encoder on Hailo NPU",
-                    attribution=Attribution(name="OpenAI", url="https://openai.com"),
-                    installed=True,
-                    languages=["en"],
-                    version="1.0.0",
-                )
-            ],
-        )
-    ]
-)
+
+def _make_info(model_name: str) -> Info:
+    """Build the Wyoming Info descriptor for the loaded model."""
+    # Derive a human-readable label from the model name (e.g. "small.en" → "Whisper small (English)")
+    size = model_name.split(".")[0].capitalize()
+    lang_suffix = " (English)" if model_name.endswith(".en") else ""
+    return Info(
+        asr=[
+            AsrProgram(
+                name="wyoming-hailo-whisper",
+                description="Whisper STT accelerated by Hailo NPU",
+                attribution=Attribution(name="hailo-ai", url="https://hailo.ai"),
+                installed=True,
+                version="1.0.0",
+                models=[
+                    AsrModel(
+                        name=model_name,
+                        description=f"Whisper {size}{lang_suffix}, encoder on Hailo NPU",
+                        attribution=Attribution(name="OpenAI", url="https://openai.com"),
+                        installed=True,
+                        languages=["en"] if model_name.endswith(".en") else [],
+                        version="1.0.0",
+                    )
+                ],
+            )
+        ]
+    )
 
 
 class HailoWhisperEventHandler(AsyncEventHandler):
@@ -46,13 +52,14 @@ class HailoWhisperEventHandler(AsyncEventHandler):
     def __init__(self, *args, core: HailoWhisperCore, **kwargs):
         super().__init__(*args, **kwargs)
         self.core = core
+        self._info = _make_info(core.model_name)
         self._audio_buffer: Optional[bytearray] = None
         self._in_utterance: bool = False
 
     async def handle_event(self, event: Event) -> bool:
         # ── Info request ──────────────────────────────────────────────────────
         if Describe.is_type(event.type):
-            await self.write_event(_INFO.event())
+            await self.write_event(self._info.event())
             return True
 
         # ── Audio start ───────────────────────────────────────────────────────
