@@ -5,10 +5,10 @@
 # Cross-compilation strategy:
 #   ubuntu-latest (amd64) + QEMU + docker buildx → linux/arm64 image.
 #   This works because:
-#     - hailo_platform wheel is pre-compiled aarch64 (just copied in, not run)
 #     - torch arm64 wheels are on PyPI
 #     - whisper.load_model() runs under QEMU emulation (slow on first build,
 #       then skipped entirely by Docker layer cache)
+#     - hailo_platform is NOT in the image — it is bind-mounted from the Pi host
 #
 # Artifact supply:
 #   The HailoRT Python wheel is proprietary and requires a Hailo developer
@@ -31,7 +31,7 @@
 #                          HEF files are fetched from:
 #                            https://dev-public.hailo.ai/v<WHISPER_VERSION>/blob/Whisper-<Size>.hef
 #                          e.g. set to "2.2.0" to fetch Whisper-Small.hef from v2.2.0
-#     DOCKERHUB_IMAGE_NAME Optional: override default image name (canthefason/hailo-whisper)
+#     DOCKERHUB_IMAGE_NAME Optional: override default image name (canthefason/wyoming-hailo-whisper)
 #
 # Finding the right WHISPER_VERSION:
 #   Browse https://dev-public.hailo.ai/ to find the version that contains the
@@ -70,7 +70,7 @@ on:
         default: true
 
 env:
-  IMAGE_NAME: ${{ vars.DOCKERHUB_IMAGE_NAME || 'canthefason/hailo-whisper' }}
+  IMAGE_NAME: ${{ vars.DOCKERHUB_IMAGE_NAME || 'canthefason/wyoming-hailo-whisper' }}
   HAILO_VERSION: '5.3.0'
   # Default model when not triggered by workflow_dispatch
   DEFAULT_MODEL: 'small.en'
@@ -175,7 +175,7 @@ jobs:
           curl -fsSL -o "${HEF}" "${HEF_URL}"
           echo "  Downloaded: $(du -sh "${HEF}" | cut -f1)"
 
-      # ── 7. Docker Hub login ────────────────────────────────────────────────────
+      # ── 6. Docker Hub login ────────────────────────────────────────────────────
       - name: Log in to Docker Hub
         if: steps.params.outputs.push == 'true'
         uses: docker/login-action@v3
@@ -183,7 +183,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # ── 8. Build (and push) ────────────────────────────────────────────────────
+      # ── 7. Build (and push) ────────────────────────────────────────────────────
       # Layer cache stored in GitHub Actions cache so repeat builds skip the
       # expensive torch install and whisper.load_model() layers entirely.
       - name: Build and push
@@ -205,7 +205,7 @@ jobs:
           cache-to:   type=gha,scope=hailo-whisper-${{ steps.params.outputs.model }},mode=max
           provenance: false   # smaller image — no SBOM/attestation layer on arm64
 
-      # ── 9. Smoke test ─────────────────────────────────────────────────────────
+      # ── 8. Smoke test ─────────────────────────────────────────────────────────
       # Inspect the built image without running it (avoids slow QEMU startup).
       - name: Smoke test — verify image metadata
         if: steps.params.outputs.push != 'true'
@@ -225,7 +225,7 @@ jobs:
           docker inspect smoke-test:local \
             --format '{{index .Config.Env}}' | tr ' ' '\n' | grep WHISPER_MODEL
 
-      # ── 10. Job summary ───────────────────────────────────────────────────────
+      # ── 9. Job summary ────────────────────────────────────────────────────────
       - name: Job summary
         if: always()
         run: |

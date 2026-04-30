@@ -6,7 +6,7 @@
 #   docker build \
 #     --build-arg HEF=whisper_small_en_encoder.hef \
 #     --build-arg WHISPER_MODEL=small.en \
-#     -t canthefason/hailo-whisper:latest \
+#     -t canthefason/wyoming-hailo-whisper:latest \
 #     .
 #
 # Override model at build time:

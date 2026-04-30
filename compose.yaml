@@ -126,7 +126,7 @@ services:
 
   hailo-whisper:
     container_name: hailo-whisper
-    image: canthefason/hailo-whisper:latest
+    image: canthefason/wyoming-hailo-whisper:latest
     environment:
       - HAILO_VDEVICE_GROUP_ID=SHARED
       - HAILO_OLLAMA_VDEVICE_GROUP_ID=SHARED
