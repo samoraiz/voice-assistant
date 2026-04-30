@@ -17,14 +17,14 @@
 #   RPI_HOST              — SSH alias or hostname     (default: rpi.local)
 #   RPI_USER              — Pi username               (default: pi)
 #   HA_DIR                — HA compose dir on Pi      (default: /home/<user>/homeassistant)
-#   HAILO_WHISPER_IMAGE   — Docker image for Whisper  (default: canthefason/hailo-whisper)
+#   HAILO_WHISPER_IMAGE   — Docker image for Whisper  (default: canthefason/wyoming-hailo-whisper)
 # ============================================================
 set -euo pipefail
 
 SSH_ALIAS="${RPI_HOST:-rpi.local}"
 RPI_USER="${RPI_USER:-pi}"
 HA_DIR="${HA_DIR:-/home/${RPI_USER}/homeassistant}"
-HAILO_WHISPER_IMAGE="${HAILO_WHISPER_IMAGE:-canthefason/hailo-whisper}"
+HAILO_WHISPER_IMAGE="${HAILO_WHISPER_IMAGE:-canthefason/wyoming-hailo-whisper}"
 HAILO_VERSION="5.3.0"
 WYOMING_STT_PORT=10300
 INSTALL_DIR="/opt/voice-assistant"
@@ -250,7 +250,7 @@ confirm "HailoRT v${HAILO_VERSION} installed. Proceed to Whisper (NPU-accelerate
 # ═══════════════════════════════════════════════════════════════
 header "STEP 3 — Whisper STT (Hailo NPU encoder + Wyoming server)"
 
-# 3a. Whisper runs as a Docker container (canthefason/hailo-whisper).
+# 3a. Whisper runs as a Docker container (canthefason/wyoming-hailo-whisper).
 #     Read the existing compose file, add the service if missing, then
 #     bring it up and health-check the Wyoming STT port.
 
