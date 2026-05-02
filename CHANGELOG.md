@@ -10,6 +10,17 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.0.2] — 2026-05-01
+
+### Added
+- `hailo_ollama_proxy`: single `--log-level info|debug|trace` arg (env: `PROXY_LOG_LEVEL`) replaces separate `--debug` / `--trace` flags
+  - `info` — startup banner only (default)
+  - `debug` — log every request and response body; system prompt truncated to 200 chars
+  - `trace` — like debug but full bodies with no truncation; use when inspecting the full HA system prompt or entity list
+- Truncation hint in debug mode shows how many chars were cut and suggests `--log-level trace`
+
+---
+
 ## [1.0.1] — 2026-05-01
 
 ### Added
@@ -49,6 +60,7 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-[Unreleased]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/canthefason/hailo-voice-assistant/releases/tag/v1.0.0
