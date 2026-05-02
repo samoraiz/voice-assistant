@@ -8,6 +8,34 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Injected tool call examples reordered: dim (with `brightness_pct`) is now first so the model pattern-matches against it for brightness commands
+- Added `turn off` as a third injected example — model was using `turn_on` for all commands including off requests
+- Tool injection on tool-result follow-up turns now skips the JSON-only example block and asks for a one-sentence natural-language confirmation instead. Previously the model parroted JSON back after every successful action, validation rejected it as `{"list":[{}]}`, and HA's TTS read the raw JSON aloud
+- System prompt rules tightened: explicit instructions against repeating `service_data` and against appending the friendly-name suffix to `entity_id`
+- Brightness commands: added explicit rule banning `brightness` (no `_pct`), `value`, and the invented service name `set_brightness_pct`; expanded examples to cover "set to N%", "at N%", "brighter", "darker" alongside "dim"
+- One-action-per-list rule added — model was emitting `turn_on + turn_off` pairs that cancelled each other for some dim phrasings
+- Follow-up reply hint hardened: "EXACTLY ONE short sentence about ONLY the device the user asked about, do not invent details" — model was listing unrelated entities and fabricating brightness values in the spoken summary
+- Proxy-side normalisation of model output (qwen2.5:1.5b ignores rules even after the prompt is tightened):
+  - Service name aliases: `set_brightness`, `set_brightness_pct`, `set_brightness_level`, `dim`, `brighten`, `darken` → `turn_on`
+  - Argument-key aliases: `value`, `new_value`, `new_level`, `brightness`, `level`, `dim_level`, `percent`, `pct` → `brightness_pct`
+  - Item-level `brightness_pct` (sibling of `service_data`) is moved INTO `service_data` so HA actually applies it
+  - Brightness values > 100 are rescaled from the 0-255 range to 0-100
+  - List entries targeting the same `(domain, entity_id)` are merged so a plain `turn_on` plus a `turn_on`-with-brightness collapse into one well-formed call
+  - A `turn_off` of an entity that was just `turn_on`'d in the same call is dropped (self-cancelling pair)
+  - Cross-entity brightness rescue: when the model puts the user-intended action on entity A and a brightness on entity B (e.g. accidentally targeting `light.0x...,Guest Room Stand Light`), the brightness is copied onto A and the second item is dropped — observed as the dominant failure mode for "dim/set/at N%" phrasings on qwen2.5:1.5b
+  - Multi-distinct-entity drop: when more than one distinct `entity_id` remains after coalesce, only the first item is kept. Project scope is single-device commands and the second entity has consistently been bogus in observed traffic
+- Follow-up reply truncated to the first sentence — kills the multi-paragraph hallucinated entity roll-call ("the main bedroom lights remained off, the table lights were turned off, …") that came after an otherwise correct opening sentence
+- Follow-up reply also blanked when the model emits a JSON tool-call shape (e.g. `{"list":[]}`) instead of natural language; previously the JSON was read aloud
+- Entity-id allowlist: the proxy scrapes HA's "Available Devices" list from the request system prompt and rejects any tool call whose `entity_id` is not in that set. Hallucinated ids no longer reach HA; the response falls through to silent JSON-blanking instead of speaking an HA `Unable to find entity` error
+- Example ordering kept brightness-first (kept after a reorder experiment): putting plain `turn on` / `turn off` at the top of the example list was tried as a fix for the on/off entity hallucination but regressed dim accuracy from 6/8 to 3/8 without fixing the hallucination. The original brightness-first order is more accuracy-sensitive overall
+
+### Fixed
+- `hailo_ollama_proxy`: stray trailing `"` appended by the model to its JSON output (e.g. `{...}}"`) caused `json.loads` to fail and the tool call rewrite to fall through to plain text; `_fix_json` now strips leading/trailing quote characters before any parse attempt
+- `hailo_ollama_proxy`: model output with two `service_data` keys in one service entry (e.g. `entity_id` in one, `brightness_pct` in the next) lost the `entity_id` after parsing; new `_merge_duplicate_service_data` pre-pass merges them before `json.loads`
+- `hailo_ollama_proxy`: `entity_id` values copied from HA's CSV-formatted entity list with a `,Friendly Name` suffix (e.g. `light.0x001788...,Guest Room Light`) are now stripped to the bare dotted id before validation
+- `hailo_ollama_proxy`: when a JSON-shaped response fails tool-call validation or cannot be parsed at all, `content` is now blanked to `""` instead of being passed through verbatim, so HA's TTS no longer reads raw JSON aloud as the spoken reply
+
 ---
 
 ## [1.0.7] — 2026-05-01
