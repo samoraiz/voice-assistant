@@ -8,12 +8,22 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [1.0.9] — 2026-05-02
+
 ### Added
-- `hailo_ollama_proxy`: single retry on tool-call validation rejection. When the model emits a JSON-shaped tool call that fails validation (empty list, hallucinated `entity_id`, missing `domain`/`service`), the proxy resends the same request once with `temperature=0.7` and `top_p=0.95` to perturb sampling. The first failure is often a deterministic mistake — qwen2.5:1.5b at the default `temperature=0.1` HA sends will keep picking the same wrong Zigbee-style id; a higher-temperature retry breaks the pattern. Costs ~one extra inference (~10-15s) on failed first attempts only; successful first attempts are unaffected.
+- `hailo_ollama_proxy`: single retry on tool-call validation rejection. When the model emits a JSON-shaped tool call that fails validation (empty list, hallucinated `entity_id`, missing `domain`/`service`), the proxy resends the same request once with `temperature=0.7` and `top_p=0.95` to perturb sampling. The first failure is often a deterministic mistake — qwen2.5:1.5b at the default `temperature=0.1` HA sends will keep picking the same wrong Zigbee-style id; a higher-temperature retry breaks the pattern. Costs ~one extra inference (~10-15s) on failed first attempts only; successful first attempts are unaffected. Live test on the Pi recovered "turn on the office lights" (was hallucinating a non-existent Zigbee-style entity_id).
 - `--no-retry-on-rejection` CLI flag (default: retry enabled). Use it to opt out if the latency hit on failures matters more than the accuracy gain.
+- `voice-test.sh`: repeatable smoke-test script that sends a list of voice commands through HA's `/api/conversation/process` and reports each spoken reply with ✔/⊘/✘ verdicts plus wall-clock duration. Replaces the ad-hoc curl loops we'd been pasting into the shell. Supports `-f FILE`, `--interval N`, `--log` (dumps proxy markers), and ad-hoc commands as positional args.
+- `README.md`: new "Testing voice commands" section documenting `voice-test.sh` usage and env vars.
+- `.claude/skills/voice-pr-flow/SKILL.md`: project-level Claude Code skill that codifies the live-test PR workflow established by PR #17 / #18 — sync local main, branch off main, build → wait for green → deploy → live-test against the deployed image with a side-by-side comparison vs. the most recent released `v1.0.x` baseline. Includes anti-patterns (skipping live test, reordering examples on instinct, deploying stale image, version-bumping in feature branch).
+- `.gitignore`: excludes per-machine Claude Code state (`.claude/scheduled_tasks.lock`, `.claude/settings.local.json`) while keeping `.claude/skills/` tracked.
 
 ### Changed
 - `rewrite_tool_response` now returns `(body, status)` where `status ∈ {'tool_call', 'rejected', 'pass_through'}` so the request layer can decide whether to retry. No behaviour change when retry is disabled.
+- `Handler._send_to_backend` extracted from `_forward` so the retry path doesn't duplicate request-building / header forwarding logic.
+- Proxy startup log shows `retry-on-rejection=off` when disabled (omitted when default-on, to keep the line readable).
 
 ---
 
@@ -145,7 +155,8 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-[Unreleased]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.8...HEAD
+[Unreleased]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.9...HEAD
+[1.0.9]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.8...v1.0.9
 [1.0.8]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.7...v1.0.8
 [1.0.7]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.5...v1.0.6
