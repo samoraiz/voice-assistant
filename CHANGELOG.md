@@ -10,6 +10,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.0.4] — 2026-05-01
+
+### Fixed
+- `hailo_ollama_proxy`: model JSON output with trailing commas (e.g. `[{...},]`) now parsed correctly — common LLM artifact that caused `rewrite_tool_response` to silently fall back to plain text, preventing Home Assistant from receiving the tool call
+- Added `_fix_json()` helper that strips trailing commas before `]`/`}` and markdown fences; applied to all parse paths in `_try_parse_tool_call`
+
+---
+
 ## [1.0.3] — 2026-05-01
 
 ### Added
@@ -69,7 +77,8 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-[Unreleased]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.4...HEAD
+[1.0.4]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.0...v1.0.1
