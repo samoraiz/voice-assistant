@@ -10,6 +10,16 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.0.5] — 2026-05-01
+
+### Fixed
+- `hailo_ollama_proxy`: tool call JSON truncated at token limit, producing unparseable output (e.g. missing final `}`)
+  - `inject_tool_prompt` now raises `max_tokens` to at least 250 when tools are present — a pretty-printed single-service call is ~150-200 tokens and the previous 119-120 cap was cutting output mid-JSON
+  - `inject_defaults` no longer clamps `max_tokens` values ≤ 500; only pathologically high values (HA default: 1022) are clamped, preserving the 250 set by `inject_tool_prompt`
+  - `_fix_json` now balances unmatched braces/brackets as a safety net, handling any future truncation that slips through
+
+---
+
 ## [1.0.4] — 2026-05-01
 
 ### Fixed
@@ -77,7 +87,8 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-[Unreleased]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.5...HEAD
+[1.0.5]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.1...v1.0.2
