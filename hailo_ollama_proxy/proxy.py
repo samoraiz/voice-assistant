@@ -68,6 +68,13 @@ def _parse_args():
     p.add_argument('--top-p', type=float, default=None,
                    help='Top-p nucleus sampling to inject (e.g. 0.9). '
                         'Omit to leave at model default.')
+    p.add_argument('--log-level',
+                   choices=['info', 'debug', 'trace'],
+                   default=os.environ.get('PROXY_LOG_LEVEL', 'info').lower(),
+                   help='Logging verbosity (env: PROXY_LOG_LEVEL). '
+                        'info=startup only, '
+                        'debug=log requests/responses (system prompt truncated to 200 chars), '
+                        'trace=like debug but full bodies, no truncation.')
     return p.parse_args()
 
 
@@ -75,6 +82,48 @@ ARGS = _parse_args()
 LISTEN_PORT  = ARGS.listen_port
 BACKEND_PORT = ARGS.backend_port
 BACKEND = 'http://127.0.0.1:' + str(BACKEND_PORT)
+
+_SEP = '─' * 60
+_SYSTEM_PROMPT_TRUNCATE = 200
+
+def _debug_log(direction, status_or_method, path, body_bytes):
+    """Print a formatted request or response block to stderr.
+
+    direction : 'REQ' or 'RES'
+    status_or_method : HTTP method (REQ) or status code (RES)
+    path : request path
+    body_bytes : raw body (may be None)
+
+    Controlled by --log-level:
+      info   no-op
+      debug  truncates system message to _SYSTEM_PROMPT_TRUNCATE chars
+      trace  full bodies, no truncation
+    """
+    level = ARGS.log_level
+    if level == 'info':
+        return
+    lines = ['\n[proxy:{}:{}] {} {}'.format(level.upper(), direction, status_or_method, path)]
+    if body_bytes:
+        try:
+            data = json.loads(body_bytes.decode('utf-8'))
+            if level == 'debug' and 'messages' in data:
+                for msg in data['messages']:
+                    if msg.get('role') == 'system' and isinstance(msg.get('content'), str):
+                        if len(msg['content']) > _SYSTEM_PROMPT_TRUNCATE:
+                            msg['content'] = (
+                                msg['content'][:_SYSTEM_PROMPT_TRUNCATE]
+                                + ' …[{} chars truncated — use --log-level trace to see full prompt]'
+                                  .format(len(msg['content']) - _SYSTEM_PROMPT_TRUNCATE)
+                            )
+            pretty = json.dumps(data, indent=2)
+        except Exception:
+            pretty = body_bytes.decode('utf-8', errors='replace')
+        lines.append(pretty)
+    else:
+        lines.append('(no body)')
+    lines.append(_SEP)
+    sys.stderr.write('\n'.join(lines) + '\n')
+    sys.stderr.flush()
 
 
 def fix_json_control_chars(body_bytes):
@@ -220,7 +269,9 @@ def inject_defaults(body_bytes, path):
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
-        pass  # suppress per-request noise; errors still go to stderr
+        # Suppress default per-request noise; debug logging is handled explicitly.
+        if ARGS.log_level != 'info':
+            sys.stderr.write('[proxy] ' + (fmt % args) + '\n')
 
     def do_GET(self):
         if self.path.rstrip('/') == '/v1/models':
@@ -252,6 +303,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = fix_json_control_chars(body)
             body = sanitize_for_hailo(body)
             body = inject_defaults(body, self.path)
+        _debug_log('REQ', self.command, self.path, body)
         req = urllib.request.Request(
             BACKEND + self.path, data=body, method=self.command)
         for k, v in self.headers.items():
@@ -260,10 +312,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             r = urllib.request.urlopen(req, timeout=300)
             resp_body = r.read()
+            _debug_log('RES', r.status, self.path, resp_body)
             self._send(r.status, resp_body,
                        r.headers.get('Content-Type', 'application/octet-stream'))
         except urllib.error.HTTPError as exc:
             resp_body = exc.read()
+            _debug_log('RES', exc.code, self.path, resp_body)
             self._send(exc.code, resp_body,
                        exc.headers.get('Content-Type', 'application/json'))
         except Exception as exc:
@@ -282,7 +336,7 @@ if __name__ == '__main__':
     sys.stderr.write(
         '[proxy] listening on :{listen} -> hailo-ollama:{backend} | '
         'max_tokens={mt} num_predict={np} num_ctx={nc}'
-        '{temp}{topp}\n'.format(
+        '{temp}{topp}{debug}\n'.format(
             listen=LISTEN_PORT,
             backend=BACKEND_PORT,
             mt=ARGS.max_tokens,
@@ -290,6 +344,7 @@ if __name__ == '__main__':
             nc=ARGS.num_ctx,
             temp=' temperature={}'.format(ARGS.temperature) if ARGS.temperature is not None else '',
             topp=' top_p={}'.format(ARGS.top_p) if ARGS.top_p is not None else '',
+            debug='' if ARGS.log_level == 'info' else ' log-level={}'.format(ARGS.log_level),
         )
     )
     http.server.HTTPServer(('0.0.0.0', LISTEN_PORT), Handler).serve_forever()
