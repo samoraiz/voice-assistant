@@ -10,6 +10,19 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.0.1] — 2026-05-01
+
+### Added
+- `hailo_ollama_proxy`: all inference thresholds now configurable via CLI args — `--max-tokens`, `--num-predict`, `--num-ctx`, `--temperature`, `--top-p`, `--listen-port`, `--backend-port`
+- Proxy startup log now prints the active config for easy verification via `docker logs hailo-ollama`
+
+### Fixed
+- `/v1/chat/completions` path (used by Home Assistant) was not receiving `num_ctx` injection — context window was unconstrained on every HA voice request
+- Raised `num_ctx` default from 512 to 1024 to accommodate the HA system prompt + entity list without truncation
+- `num_predict` cap now applies as a hard ceiling on native API paths (previously only injected when missing, not when caller sent a higher value)
+
+---
+
 ## [1.0.0] — 2026-05-01
 
 ### Added
@@ -36,5 +49,6 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-[Unreleased]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/canthefason/hailo-voice-assistant/releases/tag/v1.0.0

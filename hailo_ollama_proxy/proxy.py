@@ -27,14 +27,10 @@ Layer 2 — sanitize_for_hailo (marker: hailo-sanitize-v1):
     newlines/CR/TAB inside messages[].content, prompt, and system fields
     with spaces before forwarding.
 
-Latency optimisation — inject_defaults (marker: hailo-latency-v5):
+Latency optimisation — inject_defaults (marker: hailo-latency-v4):
     Caps max_tokens / num_predict and constrains num_ctx to avoid runaway
     generation on the Hailo-10H NPU. Only injects values the caller omitted.
-    All thresholds are configurable via CLI args (see --help).
-
-CLI args override environment variables, which override built-in defaults.
 """
-import argparse
 import http.server
 import json
 import os
@@ -42,38 +38,8 @@ import sys
 import urllib.error
 import urllib.request
 
-
-def _parse_args():
-    p = argparse.ArgumentParser(
-        description='OpenAI-compatibility proxy for hailo-ollama',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    p.add_argument('--listen-port', type=int,
-                   default=int(os.environ.get('OLLAMA_PROXY_PORT', '11434')),
-                   help='Port this proxy listens on (env: OLLAMA_PROXY_PORT)')
-    p.add_argument('--backend-port', type=int,
-                   default=int(os.environ.get('HAILO_INTERNAL_PORT', '11436')),
-                   help='hailo-ollama backend port (env: HAILO_INTERNAL_PORT)')
-    # Inference caps
-    p.add_argument('--max-tokens', type=int, default=120,
-                   help='Hard cap on max_tokens for /v1/chat/completions')
-    p.add_argument('--num-predict', type=int, default=60,
-                   help='Hard cap on num_predict for /api/generate and /api/chat')
-    p.add_argument('--num-ctx', type=int, default=1024,
-                   help='Context window size injected into all paths')
-    # Optional quality knobs — only injected when explicitly set
-    p.add_argument('--temperature', type=float, default=None,
-                   help='Sampling temperature to inject (e.g. 0.1). '
-                        'Omit to leave at model default.')
-    p.add_argument('--top-p', type=float, default=None,
-                   help='Top-p nucleus sampling to inject (e.g. 0.9). '
-                        'Omit to leave at model default.')
-    return p.parse_args()
-
-
-ARGS = _parse_args()
-LISTEN_PORT  = ARGS.listen_port
-BACKEND_PORT = ARGS.backend_port
+BACKEND_PORT = int(os.environ.get('HAILO_INTERNAL_PORT', '11436'))
+LISTEN_PORT  = int(os.environ.get('OLLAMA_PROXY_PORT', '11434'))
 BACKEND = 'http://127.0.0.1:' + str(BACKEND_PORT)
 
 
@@ -153,26 +119,17 @@ def sanitize_for_hailo(body_bytes):
 
 
 def inject_defaults(body_bytes, path):
-    """hailo-latency-v5
+    """hailo-latency-v4
 
     Inject conservative inference defaults to reduce latency for short
-    Home Assistant voice prompts. Caps are configurable via CLI args.
-
-    /v1/chat/completions (OpenAI-compat, used by Home Assistant):
-      - max_tokens  hard-capped at --max-tokens (default 120)
-      - num_ctx     injected as --num-ctx (default 1024); large enough to
-                    hold the HA system prompt + entity list + user turn
-      - temperature injected if --temperature is set
-      - top_p       injected if --top-p is set
-
-    /api/generate, /api/chat (native Ollama API):
-      - num_predict hard-capped at --num-predict (default 60)
-      - num_ctx     injected into options{} at --num-ctx
-      - temperature / top_p injected into options{} when set
+    Home Assistant voice prompts. Only sets values the caller did not specify:
+      - max_tokens=120 for /v1/chat/completions  (limits output length)
+      - num_predict=60 for /api/generate|chat    (Ollama-native equivalent)
+      - num_ctx=512    for /api/generate|chat    (smaller KV cache = faster prefill)
 
     max_tokens=120 covers a full tool_call JSON (~50 tokens) plus a short
     spoken reply. At ~14 tok/s on Hailo-10H this caps worst-case generation
-    at ~8s.
+    at ~8s. 512 ctx covers the HA system prompt + user turn with room to spare.
     """
     try:
         data = json.loads(body_bytes.decode('utf-8'))
@@ -185,32 +142,19 @@ def inject_defaults(body_bytes, path):
     if p == '/v1/chat/completions':
         # Always enforce a hard cap — HA sends max_tokens=1022 by default which
         # at ~14 tok/s on Hailo-10H would allow up to 73s of generation.
-        if data.get('max_tokens', 0) > ARGS.max_tokens or 'max_tokens' not in data:
-            data['max_tokens'] = ARGS.max_tokens
+        if data.get('max_tokens', 0) > 120:
+            data['max_tokens'] = 120
             changed = True
-        if 'num_ctx' not in data:
-            data['num_ctx'] = ARGS.num_ctx
+        elif 'max_tokens' not in data:
+            data['max_tokens'] = 120
             changed = True
-        if ARGS.temperature is not None and 'temperature' not in data:
-            data['temperature'] = ARGS.temperature
-            changed = True
-        if ARGS.top_p is not None and 'top_p' not in data:
-            data['top_p'] = ARGS.top_p
-            changed = True
-
     elif p in ('/api/generate', '/api/chat'):
         opts = data.setdefault('options', {})
-        if opts.get('num_predict', 0) > ARGS.num_predict or 'num_predict' not in opts:
-            opts['num_predict'] = ARGS.num_predict
+        if 'num_predict' not in opts:
+            opts['num_predict'] = 60
             changed = True
         if 'num_ctx' not in opts:
-            opts['num_ctx'] = ARGS.num_ctx
-            changed = True
-        if ARGS.temperature is not None and 'temperature' not in opts:
-            opts['temperature'] = ARGS.temperature
-            changed = True
-        if ARGS.top_p is not None and 'top_p' not in opts:
-            opts['top_p'] = ARGS.top_p
+            opts['num_ctx'] = 512
             changed = True
 
     if not changed:
@@ -280,16 +224,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     sys.stderr.write(
-        '[proxy] listening on :{listen} -> hailo-ollama:{backend} | '
-        'max_tokens={mt} num_predict={np} num_ctx={nc}'
-        '{temp}{topp}\n'.format(
-            listen=LISTEN_PORT,
-            backend=BACKEND_PORT,
-            mt=ARGS.max_tokens,
-            np=ARGS.num_predict,
-            nc=ARGS.num_ctx,
-            temp=' temperature={}'.format(ARGS.temperature) if ARGS.temperature is not None else '',
-            topp=' top_p={}'.format(ARGS.top_p) if ARGS.top_p is not None else '',
-        )
+        '[proxy] listening on :' + str(LISTEN_PORT) +
+        ' -> hailo-ollama:' + str(BACKEND_PORT) + '\n'
     )
     http.server.HTTPServer(('0.0.0.0', LISTEN_PORT), Handler).serve_forever()
