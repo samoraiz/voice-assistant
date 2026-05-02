@@ -8,6 +8,10 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [1.0.8] — 2026-05-02
+
 ### Changed
 - Injected tool call examples reordered: dim (with `brightness_pct`) is now first so the model pattern-matches against it for brightness commands
 - Added `turn off` as a third injected example — model was using `turn_on` for all commands including off requests
@@ -134,7 +138,8 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-[Unreleased]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.7...HEAD
+[Unreleased]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.8...HEAD
+[1.0.8]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.7...v1.0.8
 [1.0.7]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/canthefason/hailo-voice-assistant/compare/v1.0.4...v1.0.5
