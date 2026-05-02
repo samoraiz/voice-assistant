@@ -340,6 +340,19 @@ def inject_tool_prompt(body_bytes):
     return json.dumps(data).encode('utf-8'), True
 
 
+def _fix_json(text):
+    """Best-effort repair of common LLM JSON output artifacts.
+
+    - Strips trailing commas before ] or } (e.g. [1, 2,] or {"a":1,})
+    - Strips markdown fences
+    """
+    if '```' in text:
+        text = re.sub(r'```[a-z]*\n?', '', text).strip()
+    # Remove trailing commas before closing brackets/braces
+    text = re.sub(r',\s*([}\]])', r'\1', text)
+    return text
+
+
 def _try_parse_tool_call(text):
     """Extract (fn_name, arguments_dict) from model output, or return None.
 
@@ -348,18 +361,15 @@ def _try_parse_tool_call(text):
       {"list": [...]}                        bare execute_services arguments
       fn_name({"list": [...]})               Python-style call notation
       ```json\\n{...}\\n```                  markdown-wrapped JSON
+    Trailing commas and markdown fences are repaired before parsing.
     """
-    text = text.strip()
-
-    # Strip markdown fences
-    if '```' in text:
-        text = re.sub(r'```[a-z]*\n?', '', text).strip()
+    text = _fix_json(text.strip())
 
     # Pattern: func_name({...})
     fn_match = re.match(r'^(\w+)\s*\((\{.+\})\)\s*$', text, re.DOTALL)
     if fn_match:
         try:
-            return fn_match.group(1), json.loads(fn_match.group(2))
+            return fn_match.group(1), json.loads(_fix_json(fn_match.group(2)))
         except Exception:
             pass
 
