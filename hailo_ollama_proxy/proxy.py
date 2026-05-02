@@ -243,9 +243,15 @@ def inject_defaults(body_bytes, path):
     p = path.split('?')[0].rstrip('/')
 
     if p == '/v1/chat/completions':
-        # Always enforce a hard cap — HA sends max_tokens=1022 by default which
-        # at ~14 tok/s on Hailo-10H would allow up to 73s of generation.
-        if data.get('max_tokens', 0) > ARGS.max_tokens or 'max_tokens' not in data:
+        mt = data.get('max_tokens')
+        if mt is None:
+            # Caller didn't set it — use our default
+            data['max_tokens'] = ARGS.max_tokens
+            changed = True
+        elif mt > 500:
+            # Pathologically high (HA default is 1022 — at ~14 tok/s that's 73s).
+            # Clamp to our default. Values ≤ 500 are left alone: they were either
+            # set intentionally by the caller or raised by inject_tool_prompt.
             data['max_tokens'] = ARGS.max_tokens
             changed = True
         if 'num_ctx' not in data:
@@ -337,19 +343,45 @@ def inject_tool_prompt(body_bytes):
     data.pop('tools', None)
     data.pop('tool_choice', None)
 
+    # Ensure enough headroom for a complete tool call JSON.
+    # inject_defaults caps max_tokens at ARGS.max_tokens (default 120) to limit
+    # runaway generation, but that floor is too low for a pretty-printed tool call
+    # (~150-200 tokens). Override upward here so inject_defaults won't clamp it back.
+    min_tool_tokens = max(ARGS.max_tokens, 250)
+    if data.get('max_tokens', 0) < min_tool_tokens:
+        data['max_tokens'] = min_tool_tokens
+
     return json.dumps(data).encode('utf-8'), True
 
 
 def _fix_json(text):
     """Best-effort repair of common LLM JSON output artifacts.
 
-    - Strips trailing commas before ] or } (e.g. [1, 2,] or {"a":1,})
     - Strips markdown fences
+    - Removes trailing commas before ] or } (e.g. [1, 2,] or {"a":1,})
+    - Appends missing closing brackets/braces for truncated output
     """
     if '```' in text:
         text = re.sub(r'```[a-z]*\n?', '', text).strip()
     # Remove trailing commas before closing brackets/braces
     text = re.sub(r',\s*([}\]])', r'\1', text)
+    # Balance unmatched opening braces/brackets (handles token-limit truncation)
+    stack = []
+    in_string = False
+    escape = False
+    for ch in text:
+        if escape:
+            escape = False
+        elif ch == '\\' and in_string:
+            escape = True
+        elif ch == '"':
+            in_string = not in_string
+        elif not in_string:
+            if ch in '{[':
+                stack.append('}' if ch == '{' else ']')
+            elif ch in '}]' and stack and stack[-1] == ch:
+                stack.pop()
+    text += ''.join(reversed(stack))
     return text
 
 
