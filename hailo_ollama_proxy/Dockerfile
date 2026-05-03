@@ -30,6 +30,7 @@ FROM ubuntu:24.04
 #   libusb-1.0-0 — USB transport for HailoRT (fallback if not bind-mounted)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 \
+        python3-pytest \
         curl \
         libssl3 \
         libstdc++6 \
@@ -37,8 +38,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libusb-1.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Proxy and entrypoint — our code only, no Hailo IP
+# Run unit tests before installing the proxy so a regression fails the build.
+# Tests need proxy.py importable by its original name, so we stage in /tmp.
+COPY proxy.py      /tmp/proxy.py
+COPY test_proxy.py /tmp/test_proxy.py
+RUN cd /tmp && python3 -m pytest test_proxy.py -q && rm proxy.py test_proxy.py
+
+# Proxy, prompt config, and entrypoint — our code only, no Hailo IP
 COPY proxy.py      /usr/local/bin/hailo-ollama-proxy.py
+COPY prompts.json  /usr/local/bin/prompts.json
 COPY entrypoint.sh /usr/local/bin/hailo-ollama-entrypoint.sh
 RUN chmod +x /usr/local/bin/hailo-ollama-entrypoint.sh
 
