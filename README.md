@@ -83,6 +83,7 @@ Each command prints `✔` (speech reply received), `⊘` (silent — proxy blank
 - Both `hailo-whisper` and `hailo-ollama` share the same NPU via `HAILO_VDEVICE_GROUP_ID=SHARED`.
 - Model blobs must be installed manually — `hailo-ollama pull` does not work. See `02-install-hailo-ollama-npu.sh` for the automated procedure.
 - Home Assistant sends invalid JSON (literal newlines in strings) and hailo-ollama re-serialises incorrectly — both fixed by a two-layer sanitisation step in the proxy.
+- **Use HA's local NLU for deterministic commands.** Small models like `qwen2.5:1.5b` are non-deterministic — they occasionally hallucinate entity IDs or wrong service calls for common patterns. HA's built-in intent recognition (hassil) runs before the LLM when `prefer_local_intents: true` is set on the pipeline, so commands that match a local sentence pattern are handled instantly and correctly without an LLM round-trip. We cover lights dimming ("dim the office lights to 30%"), shade scene activation ("close the bedroom blinds"), and heat pump source selection ("use the bedroom temperature sensor") with custom sentence YAML files in `config/custom_sentences/en/` and an `intent_script` block in `configuration.yaml` for the custom `HeatPumpSource` intent.
 
 ## Related
 
