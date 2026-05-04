@@ -10,6 +10,15 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.0.11] — 2026-05-04
+
+### Added
+- `wyoming_hailo_whisper`: `--corrections-file` CLI argument accepts a path to a JSON file containing `[pattern, replacement]` pairs (regex, implicit `IGNORECASE`). Corrections are loaded at startup and applied after each transcription. Built-in corrections remain the default when no file is provided.
+- `wyoming_hailo_whisper/corrections.json`: sample corrections file shipped with the module, pre-populated with the built-in correction rules, ready to copy to the Pi and edit without rebuilding the image.
+- `wyoming_hailo_whisper`: raw-transcript logging with per-utterance HA success/failure outcome. When `WHISPER_RAW_LOG` env var is set, every utterance is appended to a TSV file (`timestamp\traw\tcorrected\tresponse_type\tdetail`). The HA `/api/conversation/process` call runs in a background asyncio task so it never adds latency to the voice pipeline. Requires `HA_TOKEN`; `HA_URL` defaults to `http://host.docker.internal:8123`.
+
+---
+
 ## [1.0.9] — 2026-05-02
 
 ### Added
