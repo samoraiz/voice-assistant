@@ -17,6 +17,10 @@ TODO.md
 # Blog post (publish separately)
 hailo-ollama-blog-post.md
 
+# Python
+__pycache__/
+*.pyc
+
 # macOS
 .DS_Store
 
