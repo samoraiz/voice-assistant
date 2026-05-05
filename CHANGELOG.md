@@ -10,6 +10,16 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.1.0] — 2026-05-05
+
+### Added
+- `whisper-corrections-cron.py`: nightly script (2 AM cron) that reads the last 24 hours of `raw_transcripts.log`, fetches all voice-relevant HA entity names via the REST API, loads custom sentence YAML files (`lights.yaml`, `shades.yaml`, `heat_pump.yaml`) and conversation-trigger automations, and asks the local LLM (`qwen2.5:1.5b`) to classify each failed transcript as a Whisper phonetic misrecognition or background noise. New `[pattern, replacement]` pairs are appended to `corrections.json` and `hailo-whisper` is restarted automatically. Three sanity guards prevent hallucinated corrections from landing: misheard words must appear verbatim in the transcript, the phrase must be ≥ 2 words and not the entire utterance, and the replacement must match a known entity name or action word.
+- `docs/hailo-voice-assistant-blog.html`: new "Automating the Corrections List with the Local LLM" section covering the per-transcript LLM design, the sanity guard rationale, and the cron setup.
+- `compose.yaml`: `hailo-whisper` now passes `--corrections-file /logs/corrections.json` explicitly, activating the custom corrections file mounted from `whisper-logs/`.
+- `whisper-logs/corrections.json`: initial corrections file with built-in rules plus two new entries (`dying room → dining room`, `bright under → brighten the`) derived from transcript log analysis.
+
+---
+
 ## [1.0.11] — 2026-05-04
 
 ### Added
