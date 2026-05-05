@@ -2,7 +2,7 @@
 """
 Daily Whisper corrections updater.
 
-1. Fetches all voice-relevant entity friendly names from Home Assistant.
+1. Fetches friendly names for entities exposed to voice assistants in Home Assistant.
 2. Reads custom sentence YAML files and sentence-trigger automations so the
    LLM knows what command patterns HA already understands.
 3. Reads the last 24h of raw_transcripts.log for error rows.
@@ -33,10 +33,6 @@ OLLAMA_URL           = "http://localhost:11434/v1/chat/completions"
 HA_URL               = "http://localhost:8123"
 MODEL                = "qwen2.5:1.5b"
 
-HA_VOICE_DOMAINS = {"light", "switch", "scene", "cover", "fan", "climate",
-                    "media_player", "input_boolean", "script", "automation"}
-
-
 def log(msg):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"{ts}  {msg}", flush=True)
@@ -55,8 +51,28 @@ def load_env():
     return env
 
 
+HA_ENTITY_REGISTRY = Path("/home/ctf/homeassistant/config/.storage/core.entity_registry")
+
+
 def fetch_ha_entities(token):
-    """Return a sorted list of friendly names for voice-relevant HA entities."""
+    """Return friendly names for entities explicitly exposed to voice assistants.
+
+    Reads the entity registry file directly (REST endpoint not available) to
+    find entities with options.conversation.should_expose, then resolves their
+    friendly names from /api/states.
+    """
+    with HA_ENTITY_REGISTRY.open() as f:
+        data = json.load(f)
+
+    exposed_ids = {
+        e["entity_id"]
+        for e in data["data"]["entities"]
+        if (e.get("options") or {}).get("conversation", {}).get("should_expose")
+    }
+
+    if not exposed_ids:
+        return []
+
     req = urllib.request.Request(
         f"{HA_URL}/api/states",
         headers={"Authorization": f"Bearer {token}"},
@@ -66,8 +82,7 @@ def fetch_ha_entities(token):
 
     names = set()
     for s in states:
-        domain = s["entity_id"].split(".")[0]
-        if domain not in HA_VOICE_DOMAINS:
+        if s["entity_id"] not in exposed_ids:
             continue
         name = s["attributes"].get("friendly_name", "").strip()
         if name:
