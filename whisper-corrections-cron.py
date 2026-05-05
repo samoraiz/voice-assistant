@@ -17,6 +17,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 import urllib.request
 import yaml  # type: ignore  # installed on Pi, not in local dev env
 from datetime import datetime, timezone, timedelta
@@ -36,6 +37,18 @@ MODEL                = "qwen2.5:1.5b"
 def log(msg):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"{ts}  {msg}", flush=True)
+
+
+def retry(fn, attempts=3, delay=5):
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as e:
+            if attempt < attempts - 1:
+                log(f"  Attempt {attempt + 1}/{attempts} failed: {e} — retrying in {delay}s")
+                time.sleep(delay)
+            else:
+                raise
 
 
 def load_env():
@@ -190,15 +203,19 @@ def call_llm(prompt):
         "temperature": 0.1,
         "max_tokens": 80,
     }).encode()
-    req = urllib.request.Request(
-        OLLAMA_URL,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        data = json.loads(resp.read())
-    return data["choices"][0]["message"]["content"].strip()
+
+    def _call():
+        req = urllib.request.Request(
+            OLLAMA_URL,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read())
+        return data["choices"][0]["message"]["content"].strip()
+
+    return retry(_call)
 
 
 def classify_transcript(transcript, entity_names, sentence_patterns):
@@ -299,7 +316,7 @@ def main():
 
     log("Fetching HA entity list...")
     try:
-        entity_names = fetch_ha_entities(ha_token)
+        entity_names = retry(lambda: fetch_ha_entities(ha_token))
         log(f"Got {len(entity_names)} entity names.")
     except Exception as e:
         log(f"WARNING: Could not fetch HA entities ({e}), proceeding without them.")
