@@ -3,11 +3,14 @@
 Daily Whisper corrections updater.
 
 1. Fetches all voice-relevant entity friendly names from Home Assistant.
-2. Reads the last 24h of raw_transcripts.log for error rows.
-3. Asks the local LLM (qwen2.5:1.5b) to classify each transcript as a
-   Whisper misrecognition or background noise, using the entity list as context.
-4. Appends new [pattern, replacement] pairs to corrections.json.
-5. Restarts hailo-whisper via docker compose if the file changed.
+2. Reads custom sentence YAML files and sentence-trigger automations so the
+   LLM knows what command patterns HA already understands.
+3. Reads the last 24h of raw_transcripts.log for error rows.
+4. Asks the local LLM (qwen2.5:1.5b) to classify each transcript as a
+   Whisper misrecognition or background noise, using entity names and known
+   sentence patterns as context.
+5. Appends new [pattern, replacement] pairs to corrections.json.
+6. Restarts hailo-whisper via docker compose if the file changed.
 """
 
 import json
@@ -15,17 +18,20 @@ import re
 import subprocess
 import sys
 import urllib.request
+import yaml  # type: ignore  # installed on Pi, not in local dev env
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-LOG_FILE         = Path("/home/ctf/homeassistant/whisper-logs/raw_transcripts.log")
-CORRECTIONS_FILE = Path("/home/ctf/homeassistant/whisper-logs/corrections.json")
-REVIEW_LOG       = Path("/home/ctf/homeassistant/whisper-logs/corrections_review.log")
-ENV_FILE         = Path("/home/ctf/homeassistant/.env")
-COMPOSE_FILE     = "/home/ctf/homeassistant/compose.yaml"
-OLLAMA_URL       = "http://localhost:11434/v1/chat/completions"
-HA_URL           = "http://localhost:8123"
-MODEL            = "qwen2.5:1.5b"
+LOG_FILE             = Path("/home/ctf/homeassistant/whisper-logs/raw_transcripts.log")
+CORRECTIONS_FILE     = Path("/home/ctf/homeassistant/whisper-logs/corrections.json")
+REVIEW_LOG           = Path("/home/ctf/homeassistant/whisper-logs/corrections_review.log")
+ENV_FILE             = Path("/home/ctf/homeassistant/.env")
+COMPOSE_FILE         = "/home/ctf/homeassistant/compose.yaml"
+CUSTOM_SENTENCES_DIR = Path("/home/ctf/homeassistant/config/custom_sentences/en")
+AUTOMATIONS_FILE     = Path("/home/ctf/homeassistant/config/automations.yaml")
+OLLAMA_URL           = "http://localhost:11434/v1/chat/completions"
+HA_URL               = "http://localhost:8123"
+MODEL                = "qwen2.5:1.5b"
 
 HA_VOICE_DOMAINS = {"light", "switch", "scene", "cover", "fan", "climate",
                     "media_player", "input_boolean", "script", "automation"}
@@ -37,7 +43,6 @@ def log(msg):
 
 
 def load_env():
-    """Parse key=value pairs from the .env file."""
     env = {}
     if not ENV_FILE.exists():
         return env
@@ -67,8 +72,75 @@ def fetch_ha_entities(token):
         name = s["attributes"].get("friendly_name", "").strip()
         if name:
             names.add(name)
-
     return sorted(names)
+
+
+def _extract_sentences_from_intent_block(data):
+    """Recursively pull sentence strings out of a hassil intent data block."""
+    sentences = []
+    if isinstance(data, list):
+        for item in data:
+            sentences.extend(_extract_sentences_from_intent_block(item))
+    elif isinstance(data, dict):
+        for key, value in data.items():
+            if key == "sentences":
+                if isinstance(value, list):
+                    sentences.extend(s for s in value if isinstance(s, str))
+                elif isinstance(value, str):
+                    sentences.append(value)
+            else:
+                sentences.extend(_extract_sentences_from_intent_block(value))
+    return sentences
+
+
+def load_custom_sentences():
+    """
+    Parse custom sentence YAML files and return a flat list of sentence
+    pattern strings. Hassil syntax (brackets, pipes, slots) is kept as-is
+    so the LLM gets the actual vocabulary range, not just one example.
+    """
+    patterns = []
+    if not CUSTOM_SENTENCES_DIR.exists():
+        return patterns
+    for path in sorted(CUSTOM_SENTENCES_DIR.glob("*.yaml")):
+        try:
+            doc = yaml.safe_load(path.read_text())
+            intents = doc.get("intents", {}) if isinstance(doc, dict) else {}
+            for _, intent_body in intents.items():
+                data = intent_body.get("data", []) if isinstance(intent_body, dict) else []
+                patterns.extend(_extract_sentences_from_intent_block(data))
+        except Exception as e:
+            log(f"WARNING: could not parse {path.name}: {e}")
+    return patterns
+
+
+def load_automation_sentences():
+    """
+    Return sentence strings from conversation-trigger automations
+    (trigger: conversation, field: command or sentence).
+    """
+    sentences = []
+    if not AUTOMATIONS_FILE.exists():
+        return sentences
+    try:
+        autos = yaml.safe_load(AUTOMATIONS_FILE.read_text()) or []
+        for auto in autos:
+            triggers = auto.get("triggers", auto.get("trigger", []))
+            if not isinstance(triggers, list):
+                triggers = [triggers]
+            for t in triggers:
+                if not isinstance(t, dict):
+                    continue
+                if t.get("trigger") != "conversation":
+                    continue
+                val = t.get("command") or t.get("sentence") or t.get("sentences")
+                if isinstance(val, str):
+                    sentences.append(val)
+                elif isinstance(val, list):
+                    sentences.extend(s for s in val if isinstance(s, str))
+    except Exception as e:
+        log(f"WARNING: could not parse automations.yaml: {e}")
+    return sentences
 
 
 def read_recent_errors(hours=24):
@@ -114,17 +186,24 @@ def call_llm(prompt):
     return data["choices"][0]["message"]["content"].strip()
 
 
-def classify_transcript(transcript, entity_names):
+def classify_transcript(transcript, entity_names, sentence_patterns):
     """Ask the LLM about a single transcript. Returns (pattern, replacement) or None."""
-    entity_list = ", ".join(entity_names)
+    entity_list   = ", ".join(entity_names)
+    pattern_list  = "\n".join(f"  - {p}" for p in sentence_patterns)
+
     prompt = (
         "Smart home devices: " + entity_list + "\n\n"
+        "Known HA voice command patterns (hassil syntax — brackets = optional, "
+        "pipes = alternatives, braces = slots):\n"
+        + pattern_list + "\n\n"
         "Task: did the speech-to-text engine mishear a real smart home command?\n"
-        "Phonetic misrecognition = a word SOUNDS like the wrong word "
-        "(e.g. 'dying' sounds like 'dining', 'bright under' sounds like 'brighten the').\n\n"
+        "Phonetic misrecognition = a word SOUNDS like the wrong word so the "
+        "transcript nearly matches one of the patterns above but fails because "
+        "a word was garbled (e.g. 'dying' sounds like 'dining', "
+        "'bright under' sounds like 'brighten the').\n\n"
         f'Transcript: "{transcript}"\n\n'
         "Rules:\n"
-        "- If it is a phonetic misrecognition of a home command, reply ONLY: "
+        "- If it is a phonetic misrecognition of a known command, reply ONLY: "
         "YES: <misheard words> -> <correct words>\n"
         "- Otherwise reply ONLY: NO\n"
         "- Do not write anything else.\n\n"
@@ -137,13 +216,13 @@ def classify_transcript(transcript, entity_names):
     response = call_llm(prompt)
     log(f"  [{transcript[:50]}] -> {response[:80]}")
 
-    # Accept YES anywhere in the response — the model is verbose regardless of instructions
+    # Accept YES anywhere — the model is verbose regardless of instructions
     match = re.search(r"YES\s*:\s*(.+?)\s*->\s*(.+)", response, re.IGNORECASE)
     if not match:
         return None
 
-    wrong = match.group(1).strip().strip('"').strip("'")
-    correct = match.group(2).strip().strip('"').strip("'").rstrip(".")
+    wrong   = match.group(1).strip().strip('"\'')
+    correct = match.group(2).strip().strip('"\'').rstrip(".")
 
     if not wrong or not correct:
         return None
@@ -153,26 +232,24 @@ def classify_transcript(transcript, entity_names):
         log(f"  Rejecting '{wrong}' -> '{correct}': misheard words not in transcript")
         return None
 
-    # Guard: misheard phrase must be >= 2 words and not the entire transcript
-    # (single-word or whole-transcript matches are too ambiguous to correct safely)
-    if len(wrong.split()) < 2 or wrong.lower().rstrip(".,!?") == transcript.lower().rstrip(".,!?"):
+    # Guard: phrase must be >= 2 words and not the entire transcript
+    if (len(wrong.split()) < 2
+            or wrong.lower().rstrip(".,!?") == transcript.lower().rstrip(".,!?")):
         log(f"  Rejecting '{wrong}' -> '{correct}': phrase too short or is entire transcript")
         return None
 
-    # Guard: replacement must loosely match a known entity name or action word
+    # Guard: replacement must match a known entity name or action word
     action_words = {"turn on", "turn off", "brighten", "dim", "open", "close",
                     "brighten the", "living room", "dining room", "bedroom",
                     "office", "guest room", "main bedroom"}
     entity_names_lower = [n.lower() for n in entity_names]
-    replacement_lower = correct.lower()
-    if (not any(replacement_lower in name for name in entity_names_lower)
-            and replacement_lower not in action_words):
-        log(f"  Rejecting '{wrong}' -> '{correct}': replacement not in entity list or action words")
+    if (not any(correct.lower() in n for n in entity_names_lower)
+            and correct.lower() not in action_words):
+        log(f"  Rejecting '{wrong}' -> '{correct}': replacement not a known entity or action")
         return None
 
-    # Build a word-boundary pattern — escape each word individually to avoid
-    # re.escape adding backslashes before spaces
-    words = wrong.split()
+    # Build word-boundary pattern — escape each word individually
+    words   = wrong.split()
     pattern = r"\b" + r"\s+".join(re.escape(w) for w in words) + r"\b"
     return pattern, correct
 
@@ -199,7 +276,7 @@ def restart_hailo_whisper():
 
 
 def main():
-    env = load_env()
+    env      = load_env()
     ha_token = env.get("HA_ACCESS_TOKEN", "")
     if not ha_token:
         log("ERROR: HA_ACCESS_TOKEN not found in .env — cannot fetch entity list.")
@@ -213,6 +290,11 @@ def main():
         log(f"WARNING: Could not fetch HA entities ({e}), proceeding without them.")
         entity_names = []
 
+    custom   = load_custom_sentences()
+    auto_s   = load_automation_sentences()
+    sentence_patterns = custom + auto_s
+    log(f"Loaded {len(custom)} custom sentence pattern(s) + {len(auto_s)} automation sentence(s).")
+
     errors = read_recent_errors()
     if not errors:
         log("No errors in last 24h — nothing to do.")
@@ -220,13 +302,12 @@ def main():
 
     log(f"Found {len(errors)} error row(s). Classifying each with LLM...")
 
-    existing = load_corrections()
+    existing          = load_corrections()
     existing_patterns = {c[0] for c in existing}
+    added, skipped    = [], []
 
-    added = []
-    skipped = []
     for e in errors:
-        result = classify_transcript(e["transcript"], entity_names)
+        result = classify_transcript(e["transcript"], entity_names, sentence_patterns)
         if result is None:
             continue
         pattern, replacement = result
