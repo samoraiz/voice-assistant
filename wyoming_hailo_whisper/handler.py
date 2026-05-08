@@ -56,10 +56,16 @@ def _write_log_line(raw: str, corrected: str, response_type: str, detail: str) -
     if not _RAW_LOG_PATH:
         return
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    line = f"{ts}\t{raw}\t{corrected}\t{response_type}\t{detail}\n"
+    record = {
+        "ts": ts,
+        "raw": raw,
+        "corrected": corrected,
+        "response_type": response_type,
+        "detail": detail,
+    }
     try:
         with open(_RAW_LOG_PATH, "a") as f:
-            f.write(line)
+            f.write(json.dumps(record) + "\n")
     except OSError as e:
         _LOGGER.warning("Could not write to WHISPER_RAW_LOG %s: %s", _RAW_LOG_PATH, e)
 
@@ -88,7 +94,15 @@ def _call_ha_conversation(text: str) -> tuple[str, str]:
             failed = [t["name"] for t in data.get("failed", [])]
             detail = f"ok:{','.join(targets)}" + (f" failed:{','.join(failed)}" if failed else "")
         else:
-            detail = data.get("code", "unknown")
+            code = data.get("code", "unknown")
+            # no_valid_targets means the command was valid but HA's API call has no
+            # area context — the real satellite device handles it fine by room.
+            # Treat as success so the cron doesn't flag these as misrecognitions.
+            if code == "no_valid_targets":
+                response_type = "action_done"
+                detail = "ok:area_context"
+            else:
+                detail = code
         return response_type, detail
     except Exception as e:
         return "error", str(e)

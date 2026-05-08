@@ -5,7 +5,9 @@ Daily Whisper corrections updater.
 1. Fetches friendly names for entities exposed to voice assistants in Home Assistant.
 2. Reads custom sentence YAML files and sentence-trigger automations so the
    LLM knows what command patterns HA already understands.
-3. Reads the last 24h of raw_transcripts.log for error rows.
+3. Reads the last 24h of raw_transcripts.log for HA intent-error rows
+   (response_type=error_handling), excluding no_valid_targets which succeed
+   on the real satellite device via area context.
 4. Asks the local LLM (qwen2.5:1.5b) to classify each transcript as a
    Whisper misrecognition or background noise, using entity names and known
    sentence patterns as context.
@@ -178,13 +180,30 @@ def read_recent_errors(hours=24):
         return errors
     with LOG_FILE.open() as f:
         for line in f:
-            parts = line.strip().split("\t")
-            if len(parts) < 5:
+            line = line.strip()
+            if not line:
                 continue
-            ts_str, raw, _, status, result = (
-                parts[0], parts[1], parts[2], parts[3], parts[4]
-            )
-            if status != "error":
+            # Support both JSONL (new) and legacy TSV format
+            if line.startswith("{"):
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ts_str      = rec.get("ts", "")
+                raw         = rec.get("raw", "")
+                status      = rec.get("response_type", "")
+                detail      = rec.get("detail", "")
+            else:
+                parts = line.split("\t")
+                if len(parts) < 5:
+                    continue
+                ts_str, raw, _, status, detail = (
+                    parts[0], parts[1], parts[2], parts[3], parts[4]
+                )
+            # Candidate for LLM review: HA couldn't match a command intent.
+            # "error" = network/parse failure (legacy TSV); "error_handling" = HA intent error.
+            # Skip "error" (transient) and non-error responses.
+            if status not in ("error", "error_handling"):
                 continue
             try:
                 ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
@@ -192,7 +211,7 @@ def read_recent_errors(hours=24):
                 continue
             if ts < cutoff:
                 continue
-            errors.append({"timestamp": ts_str, "transcript": raw, "error": result})
+            errors.append({"timestamp": ts_str, "transcript": raw, "error": detail})
     return errors
 
 
