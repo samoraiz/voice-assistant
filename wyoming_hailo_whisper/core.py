@@ -22,6 +22,7 @@ import logging
 import re
 import numpy as np
 from pathlib import Path
+from typing import Optional
 
 from hailo_platform import VDevice
 from hailo_platform.genai import Speech2Text, Speech2TextTask
@@ -87,7 +88,7 @@ class HailoWhisperCore:
         model_name: str = "small.en",
         language: str = "en",
         device_id: int = 0,
-        corrections_file: str | None = None,
+        corrections_file: Optional[str] = None,
     ):
         self.hef_path = str(hef_path)
         self.model_name = model_name

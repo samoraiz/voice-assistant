@@ -7,7 +7,7 @@ import logging
 import os
 import urllib.request
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Tuple
 
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
@@ -19,9 +19,9 @@ from .core import HailoWhisperCore
 
 _LOGGER = logging.getLogger(__name__)
 
-_RAW_LOG_PATH: str | None = os.environ.get("WHISPER_RAW_LOG")
+_RAW_LOG_PATH: Optional[str] = os.environ.get("WHISPER_RAW_LOG")
 _HA_URL: str = os.environ.get("HA_URL", "http://host.docker.internal:8123")
-_HA_TOKEN: str | None = os.environ.get("HA_TOKEN")
+_HA_TOKEN: Optional[str] = os.environ.get("HA_TOKEN")
 
 
 def _make_info(model_name: str) -> Info:

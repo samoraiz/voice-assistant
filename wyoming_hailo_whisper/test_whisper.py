@@ -186,7 +186,7 @@ class TestHailoWhisperCoreTranscribe(unittest.TestCase):
 
 class TestWriteLogLine(unittest.TestCase):
 
-    def test_writes_tab_separated_line(self):
+    def test_writes_jsonl_line(self):
         with tempfile.NamedTemporaryFile(mode="r", suffix=".log", delete=False) as f:
             path = f.name
         try:
@@ -194,13 +194,12 @@ class TestWriteLogLine(unittest.TestCase):
                 handler._write_log_line("leaving room", "living room", "action_done", "ok:Living Room")
             with open(path) as f:
                 line = f.readline()
-            parts = line.rstrip("\n").split("\t")
-            self.assertEqual(len(parts), 5)
-            self.assertRegex(parts[0], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-            self.assertEqual(parts[1], "leaving room")
-            self.assertEqual(parts[2], "living room")
-            self.assertEqual(parts[3], "action_done")
-            self.assertEqual(parts[4], "ok:Living Room")
+            rec = json.loads(line)
+            self.assertRegex(rec["ts"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+            self.assertEqual(rec["raw"], "leaving room")
+            self.assertEqual(rec["corrected"], "living room")
+            self.assertEqual(rec["response_type"], "action_done")
+            self.assertEqual(rec["detail"], "ok:Living Room")
         finally:
             os.unlink(path)
 
@@ -263,11 +262,13 @@ class TestCallHaConversation(unittest.TestCase):
         self.assertEqual(rt, "action_done")
         self.assertIn("failed:Bedroom", detail)
 
-    def test_error_no_valid_targets(self):
-        resp = _ha_response("error", {"code": "no_valid_targets"})
-        rt, detail = self._call("turn on leaving room lights", resp)
-        self.assertEqual(rt, "error")
-        self.assertEqual(detail, "no_valid_targets")
+    def test_no_valid_targets_remapped_to_action_done(self):
+        # no_valid_targets means the command was valid but HA's API has no area
+        # context — the real satellite handles it fine. Treat as success.
+        resp = _ha_response("error_handling", {"code": "no_valid_targets"})
+        rt, detail = self._call("turn off the lights", resp)
+        self.assertEqual(rt, "action_done")
+        self.assertEqual(detail, "ok:area_context")
 
     def test_no_token_returns_unknown(self):
         rt, detail = self._call("anything", b"", token=None)
