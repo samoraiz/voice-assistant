@@ -10,6 +10,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.1.2] — 2026-05-08
+
+### Fixed
+- `wyoming_hailo_whisper/core.py`, `handler.py`: replaced `str | None` union syntax with `Optional[str]` for Python 3.9 compatibility (Python 3.10+ syntax caused `TypeError` at import time on the Pi's Python 3.9 runtime).
+- `wyoming_hailo_whisper/test_whisper.py`: updated `test_writes_tab_separated_line` → `test_writes_jsonl_line` to match the new JSONL log format, and `test_error_no_valid_targets` → `test_no_valid_targets_remapped_to_action_done` to match the new `action_done / ok:area_context` remap. All 29 tests pass.
+
+---
+
 ## [1.1.1] — 2026-05-08
 
 ### Added
