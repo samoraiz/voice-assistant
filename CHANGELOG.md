@@ -10,6 +10,22 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.1.1] — 2026-05-08
+
+### Added
+- `whisper-corrections-cron.py`: retry wrapper (`retry()`) around the HA entity fetch so transient network errors don't abort the run.
+- `wyoming_hailo_whisper/handler.py`: structured JSONL logging replaces the previous TSV format. Each transcript is written as a JSON object (`ts`, `raw`, `corrected`, `response_type`, `detail`) making log parsing unambiguous.
+
+### Changed
+- `whisper-corrections-cron.py`: `read_recent_errors` now accepts both JSONL (new) and legacy TSV lines for backward compatibility with existing log files.
+- `whisper-corrections-cron.py`: error filter broadened from `response_type == "error"` (network failures only) to `response_type in ("error", "error_handling")` so genuine HA intent errors are actually picked up for LLM review.
+- `whisper-corrections-cron.py`: LLM context now filtered to HA-exposed entities only (via `core.entity_registry` + `options.conversation.should_expose`), keeping prompts focused on the vocabulary the user actually controls by voice.
+
+### Fixed
+- `wyoming_hailo_whisper/handler.py`: `no_valid_targets` responses are now logged as `action_done / ok:area_context` instead of `error_handling`. Commands like "Turn off the lights" succeed on the physical satellite device via area context; the API call without area context returning `no_valid_targets` was incorrectly surfacing these as misrecognitions.
+
+---
+
 ## [1.1.0] — 2026-05-05
 
 ### Added
