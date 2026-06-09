@@ -66,10 +66,12 @@ COPY ${HEF} /opt/whisper/encoder.hef
 EXPOSE 10300
 
 ARG WHISPER_MODEL=small.en
+ARG WHISPER_LANGUAGE=en
 ENV WHISPER_MODEL=${WHISPER_MODEL}
+ENV WHISPER_LANGUAGE=${WHISPER_LANGUAGE}
 
 CMD python3 -m wyoming_hailo_whisper \
         --hef      /opt/whisper/encoder.hef \
         --uri      tcp://0.0.0.0:10300 \
         --model    $WHISPER_MODEL \
-        --language en
+        --language $WHISPER_LANGUAGE

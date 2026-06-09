@@ -23,20 +23,26 @@ Waveshare ESP32-S3 (wake word + mic)
 
 Everything runs locally. No cloud APIs. No subscriptions.
 
+## Quick Start
+
+1. **Install HailoRT 5.3.0** — download `hailort_5.3.0_*.deb` from [Hailo Developer Hub](https://developer.hailo.ai) and run `sudo dpkg -i hailort_5.3.0_*.deb`.
+2. **Check the Python bind-mount path** — run `find /usr -name "_pyhailort*.so" 2>/dev/null`. If it shows a version other than `python3.13`, update the `hailo_platform` paths in `compose.yaml` to match.
+3. **Install the model blob** — see `docs/testing-and-deploy.md` for the hailo-ollama model install procedure.
+4. **Create your `.env`** — copy `.env.example` to `.env` and set `HA_CONFIG_DIR` to the path of your Home Assistant config directory on the Pi.
+5. **Start the stack** — `docker compose up -d`.
+
 ## Files
 
-| File | Purpose |
+| File / Directory | Purpose |
 |---|---|
-| `compose.yaml` | Docker Compose for all services on the Pi |
-| `Dockerfile` | Custom hailo-ollama image with translation proxy baked in |
-| `esp32.yaml` | ESPHome config for the Waveshare ESP32-S3 AI Smart Speaker |
-| `00-setup-ssh.sh` | One-time SSH key setup for Pi access |
-| `01-install-hailo-voice-assistant.sh` | Installs base voice assistant stack (Whisper, Piper, HA) |
-| `02-install-hailo-ollama-npu.sh` | Installs hailo-ollama with NPU support and proxy |
-| `03-upgrade-service.sh` | Upgrades running services in place |
-| `pull-compose.sh` | Pulls latest compose file to Pi |
-| `voice-test.sh` | Runs voice commands through HA and reports the spoken reply (smoke test) |
-| `wyoming_hailo_whisper/` | Wyoming protocol integration for hailo-whisper |
+| `compose.yaml` | 4-service Docker Compose: hailo-ollama, hailo-whisper, piper, homeassistant |
+| `.env.example` | Environment variable reference — copy to `.env` and fill in |
+| `Dockerfile` | hailo-whisper image (Whisper encoder on Hailo NPU via Wyoming) |
+| `hailo_ollama_proxy/` | OpenAI-compat proxy for hailo-ollama; `proxy.py`, `prompts.json`, `entrypoint.sh` |
+| `wyoming_hailo_whisper/` | Wyoming STT protocol handler for hailo-whisper |
+| `voice-test.sh` | Live smoke test — sends commands through HA and reports spoken replies |
+| `whisper-corrections-cron.py` | Updates STT corrections in a running hailo-whisper container |
+| `docs/` | Proxy pipeline design, HA custom sentences guide, testing and deploy loop |
 
 ## Building the hailo-whisper Docker image
 

@@ -1,3 +1,6 @@
+# Local environment (copy from .env.example — never commit)
+.env
+
 # Logs
 *.log
 install-hailo-ollama-npu.log
