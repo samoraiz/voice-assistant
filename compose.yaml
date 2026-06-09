@@ -21,8 +21,9 @@ services:
       # - OLLAMA_PROXY_NUM_PREDICT=60
       # - OLLAMA_PROXY_MAX_TOKENS=120
     volumes:
-      # Model storage — populated by the hailo-ollama install procedure
-      - /usr/local/share/hailo-ollama:/usr/local/share/hailo-ollama
+      # Model storage — actual host path is /usr/share/hailoollama (package install layout)
+      # Container expects it at /usr/local/share/hailo-ollama (XDG_DATA_HOME=/usr/local/share)
+      - /usr/share/hailoollama:/usr/local/share/hailo-ollama
       # Hailo proprietary binaries — bind-mounted from host (not baked into image)
       - /usr/bin/hailo-ollama:/usr/local/bin/hailo-ollama:ro
       - /usr/lib/libhailort.so.5.3.0:/usr/lib/libhailort.so.5.3.0:ro
