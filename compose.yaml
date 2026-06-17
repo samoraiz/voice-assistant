@@ -1,106 +1,100 @@
 services:
 
+  # ── Home Assistant (orchestrator) ──────────────────────────────────────────
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./config:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
+
   # ── LLM inference (Hailo NPU) ──────────────────────────────────────────────
+  # Runs the native hailo-ollama binary on port 11436 (internal) and the
+  # OpenAI-compat proxy on port 11434 (what Home Assistant talks to).
+  # The proxy repairs HA's malformed JSON, normalises roles, and enforces the
+  # entity allowlist — do NOT point HA directly at the native binary.
   hailo-ollama:
     container_name: hailo-ollama
     image: canthefason/hailo-ollama:latest
     restart: unless-stopped
+    privileged: true
     ports:
-      - "11434:11434"     # OpenAI-compat proxy (what Home Assistant talks to)
-    devices:
-      - /dev/h1x-0:/dev/h1x-0
-    group_add:
-      - "0"
+      - "11434:11434"
     environment:
       - OLLAMA_KEEP_ALIVE=-1
-      - HAILO_VDEVICE_GROUP_ID=SHARED          # share NPU with hailo-whisper (HailoRT standard var)
-      - HAILO_OLLAMA_VDEVICE_GROUP_ID=SHARED   # read by the proxy/entrypoint
+      - HAILO_VDEVICE_GROUP_ID=SHARED          # share NPU with wyoming-hailo-whisper
+      - HAILO_OLLAMA_VDEVICE_GROUP_ID=SHARED
       - XDG_DATA_HOME=/usr/local/share
       - LD_LIBRARY_PATH=/usr/lib
-      # Override proxy inference defaults (v1.0.1+):
       # - OLLAMA_PROXY_NUM_CTX=1024
       # - OLLAMA_PROXY_NUM_PREDICT=60
       # - OLLAMA_PROXY_MAX_TOKENS=120
     volumes:
-      # Model storage. Two directories exist on the host after package install:
-      #   /usr/share/hailo-ollama/  — manifests (populated by package)
-      #   /usr/share/hailoollama/   — blob (populated by model download)
-      # The mount covers /usr/share/hailoollama. Copy manifests there so both
-      # pieces are visible to hailo-ollama inside the container:
-      #   sudo cp -r /usr/share/hailo-ollama/models/manifests \
-      #              /usr/share/hailoollama/models/
+      # Model storage — two host dirs created by the package install:
+      #   /usr/share/hailo-ollama/  manifests  (copy to hailoollama/ once after install)
+      #   /usr/share/hailoollama/   blobs       (bind-mounted here)
+      # One-time setup: sudo cp -r /usr/share/hailo-ollama/models/manifests \
+      #                              /usr/share/hailoollama/models/
       - /usr/share/hailoollama:/usr/local/share/hailo-ollama
-      # Hailo proprietary binaries — bind-mounted from host (not baked into image)
       - /usr/bin/hailo-ollama:/usr/local/bin/hailo-ollama:ro
       - /usr/lib/libhailort.so.5.3.0:/usr/lib/libhailort.so.5.3.0:ro
       - /usr/lib/aarch64-linux-gnu/libusb-1.0.so.0:/usr/lib/aarch64-linux-gnu/libusb-1.0.so.0:ro
       # Override the prompt config baked into the image without rebuilding:
-      # - ${HA_CONFIG_DIR}/prompts.json:/usr/local/bin/prompts.json:ro
+      # - ./config/prompts.json:/usr/local/bin/prompts.json:ro
 
   # ── Speech-to-Text / Wyoming (Hailo NPU) ───────────────────────────────────
-  hailo-whisper:
-    container_name: hailo-whisper
+  # English-only HEF baked into the current image (whisper_small_en_encoder.hef).
+  # German STT requires swapping to the multilingual HEF — see v2 plan.
+  wyoming-hailo-whisper:
+    container_name: wyoming-hailo-whisper
     image: canthefason/wyoming-hailo-whisper:latest
     restart: unless-stopped
+    privileged: true
     ports:
-      - "10300:10300"     # Wyoming protocol (Home Assistant connects here)
-    devices:
-      - /dev/h1x-0:/dev/h1x-0
+      - "10800:10800"
     environment:
-      - HAILO_VDEVICE_GROUP_ID=SHARED          # share NPU with hailo-ollama
-      - HAILO_OLLAMA_VDEVICE_GROUP_ID=SHARED
-      - PYTHONPATH=/usr/lib/python3/dist-packages
+      - HAILO_VDEVICE_GROUP_ID=SHARED
+      - PYTHONPATH=/usr/local/lib/python3.13/site-packages
       - LD_LIBRARY_PATH=/usr/lib
-      # Optional: write raw Whisper transcripts + HA result to a log file.
-      # Requires the volume mount below and HA_TOKEN to be set.
-      # - WHISPER_RAW_LOG=/logs/raw_transcripts.log
-      # - HA_URL=http://host.docker.internal:8123
-      # - HA_TOKEN=${HA_ACCESS_TOKEN}
-    extra_hosts:
-      # Allows the container to reach Home Assistant on the host network.
-      # Required for WHISPER_RAW_LOG; safe to keep even when logging is off.
-      - "host.docker.internal:host-gateway"
     volumes:
-      # Hailo Python bindings — bind-mounted from host.
-      # Path depends on which Python was used during HailoRT install.
-      # Find it with: find /usr -name "_pyhailort*.so" 2>/dev/null
-      - /usr/local/lib/python3.13/dist-packages/hailo_platform:/usr/lib/python3/dist-packages/hailo_platform:ro
-      # Native HailoRT library. Adjust version suffix if you upgrade HailoRT.
-      - /usr/lib/libhailort.so.5.3.0:/usr/lib/libhailort.so.5.3.0:ro
-      # Optional: writable directory for the raw transcript log.
-      # Create it first: mkdir -p /opt/homeassistant/whisper-logs
-      # - /opt/homeassistant/whisper-logs:/logs
+      - /dev/hailo0:/dev/hailo0
+      - ${HAILO_PLATFORM_PATH:-/home/myai/.local/lib/python3.13/site-packages/hailo_platform}:/usr/local/lib/python3.13/site-packages/hailo_platform
+      - /usr/lib/libhailort.so.5.3.0:/usr/lib/libhailort.so.5.3.0
+      - /usr/lib/libhailort.so:/usr/lib/libhailort.so
+      - ./whisper-data:/data
+    command: >
+      python3 -m wyoming_hailo_whisper
+      --hef /opt/whisper/encoder.hef
+      --uri tcp://0.0.0.0:10800
+      --model small.en
+      --language en
 
-  # ── Text-to-Speech / Wyoming (CPU) ─────────────────────────────────────────
-  piper:
-    container_name: wyoming-piper
-    image: rhasspy/wyoming-piper:2.2.2
+  # ── Text-to-Speech / Wyoming — German (CPU) ────────────────────────────────
+  wyoming-piperde:
+    container_name: wyoming-piper-de
+    image: rhasspy/wyoming-piper:latest
     restart: unless-stopped
-    command: --voice en_US-lessac-medium
     ports:
-      - "10200:10200"     # Wyoming protocol (Home Assistant connects here)
+      - "10200:10200"
     volumes:
-      - piper-data:/data
-    environment:
-      - TZ=${TZ:-America/Los_Angeles}
+      - ./piper-data-de:/data
+    command: ["--voice", "de_DE-thorsten-high"]
 
-  # ── Home Assistant (orchestrator) ──────────────────────────────────────────
-  homeassistant:
-    container_name: homeassistant
-    image: ghcr.io/home-assistant/home-assistant:2026.4.4
+  # ── Wake-word detection (CPU) ───────────────────────────────────────────────
+  wyoming-openwakeword:
+    container_name: wyoming-openwakeword
+    image: rhasspy/wyoming-openwakeword:latest
     restart: unless-stopped
-    network_mode: host
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
+    ports:
+      - "10400:10400"
     volumes:
-      - ${HA_CONFIG_DIR:-/opt/homeassistant/config}:/config
-      - /etc/localtime:/etc/localtime:ro
-      - /run/dbus:/run/dbus:ro
-
-volumes:
-  piper-data:
+      - ./openwakeword-data:/data
+      - ./openwakeword-custom:/custom
+    command: ["--preload-model", "ok_nabu"]
 
 # TODO: Add log rotation — json-file driver, max-size: 10m, max-file: 3
-#       Priority: homeassistant, hailo-ollama, hailo-whisper.
-# TODO: Add healthchecks to hailo-ollama (curl /api/tags) and hailo-whisper.
+#       Priority: homeassistant, hailo-ollama, wyoming-hailo-whisper.
+# TODO: Add healthchecks to hailo-ollama (curl /api/tags) and wyoming-hailo-whisper.
