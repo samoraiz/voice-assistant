@@ -944,7 +944,11 @@ def rewrite_tool_response(body_bytes, known_entities=None):
         fn_name, arguments = result
         if fn_name == 'execute_service':
             fn_name = 'execute_services'
-        if _validate_tool_arguments(fn_name, arguments, known_entities):
+        if not fn_name or not isinstance(fn_name, str) or fn_name.lower() == 'none':
+            # Model emitted JSON but with null/placeholder function name — blank it.
+            sys.stderr.write('[proxy] suppressed tool call with invalid function name: {!r}\n'
+                             .format(fn_name))
+        elif _validate_tool_arguments(fn_name, arguments, known_entities):
             choice['message'] = {
                 'role': 'assistant',
                 'content': None,
@@ -960,11 +964,11 @@ def rewrite_tool_response(body_bytes, known_entities=None):
             choice['finish_reason'] = 'tool_calls'
             resp['choices'] = [choice]
             return json.dumps(resp).encode('utf-8'), 'tool_call'
-
-        sys.stderr.write(
-            '[proxy] tool call validation failed for {}: {}\n'
-            .format(fn_name, json.dumps(arguments))
-        )
+        else:
+            sys.stderr.write(
+                '[proxy] tool call validation failed for {}: {}\n'
+                .format(fn_name, json.dumps(arguments))
+            )
         # Fall through to JSON-blanking below: we won't speak the bad call.
 
     if _looks_like_json(content):

@@ -659,6 +659,22 @@ class TestRewriteToolResponse(unittest.TestCase):
         self.assertEqual(tc[0]['function']['name'], 'execute_services')
         self.assertIsNone(data['choices'][0]['message']['content'])
 
+    def test_null_function_name_blanked(self):
+        # Model emits {"name": null, "arguments": {}} for conversational reply
+        content = json.dumps({'name': None, 'arguments': {'list': []}})
+        body = self._response(content)
+        out, status = proxy.rewrite_tool_response(body)
+        self.assertEqual(status, 'rejected')
+        self.assertEqual(_d(out)['choices'][0]['message']['content'], '')
+
+    def test_none_string_function_name_blanked(self):
+        # Model emits {"name": "none", "arguments": {}} — literal placeholder
+        content = json.dumps({'name': 'none', 'arguments': {'list': []}})
+        body = self._response(content)
+        out, status = proxy.rewrite_tool_response(body)
+        self.assertEqual(status, 'rejected')
+        self.assertEqual(_d(out)['choices'][0]['message']['content'], '')
+
     def test_execute_service_singular_normalized(self):
         # Model sometimes emits execute_service (no trailing s) — proxy must fix it
         content = json.dumps({
