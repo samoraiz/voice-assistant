@@ -474,6 +474,48 @@ class TestCoalesceListItems(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# _scrub_arguments
+# ---------------------------------------------------------------------------
+
+class TestScrubArguments(unittest.TestCase):
+
+    def test_toplevel_entity_id_promoted_into_service_data(self):
+        # Exact pattern seen in failing proxy logs: entity_id at item level, service_data empty
+        args = {'list': [{'domain': 'light', 'service': 'turn_off',
+                          'entity_id': 'light.living_room_lamps_1', 'service_data': {}}]}
+        result = proxy._scrub_arguments(args)
+        item = result['list'][0]
+        self.assertEqual(item['service_data']['entity_id'], 'light.living_room_lamps_1')
+        self.assertNotIn('entity_id', {k: v for k, v in item.items() if k != 'service_data'})
+
+    def test_toplevel_entity_id_no_service_data_key(self):
+        # entity_id at top level, no service_data key at all
+        args = {'list': [{'domain': 'light', 'service': 'turn_on',
+                          'entity_id': 'light.kitchen'}]}
+        result = proxy._scrub_arguments(args)
+        item = result['list'][0]
+        self.assertEqual(item['service_data']['entity_id'], 'light.kitchen')
+        self.assertNotIn('entity_id', {k: v for k, v in item.items() if k != 'service_data'})
+
+    def test_entity_id_in_service_data_unchanged(self):
+        # Normal case: entity_id already inside service_data — no change
+        args = {'list': [{'domain': 'light', 'service': 'turn_on',
+                          'service_data': {'entity_id': 'light.office'}}]}
+        result = proxy._scrub_arguments(args)
+        self.assertEqual(result['list'][0]['service_data']['entity_id'], 'light.office')
+
+    def test_service_data_entity_id_wins_when_both_present(self):
+        # If entity_id appears at both levels, keep the one inside service_data
+        args = {'list': [{'domain': 'light', 'service': 'turn_on',
+                          'entity_id': 'light.wrong',
+                          'service_data': {'entity_id': 'light.correct'}}]}
+        result = proxy._scrub_arguments(args)
+        item = result['list'][0]
+        self.assertEqual(item['service_data']['entity_id'], 'light.correct')
+        self.assertNotIn('entity_id', {k: v for k, v in item.items() if k != 'service_data'})
+
+
+# ---------------------------------------------------------------------------
 # _try_parse_tool_call
 # ---------------------------------------------------------------------------
 

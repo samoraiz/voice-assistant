@@ -802,6 +802,12 @@ def _scrub_arguments(args):
             cleaned.append(item)
             continue
         item = _normalize_brightness(item)
+        # Promote top-level entity_id into service_data (model sometimes emits it there)
+        if 'entity_id' in item:
+            sd = item.setdefault('service_data', {})
+            if 'entity_id' not in sd:
+                sd['entity_id'] = item['entity_id']
+            del item['entity_id']
         sd = item.get('service_data')
         if isinstance(sd, dict) and 'entity_id' in sd:
             sd['entity_id'] = _clean_entity_id(sd['entity_id'])
