@@ -659,6 +659,21 @@ class TestRewriteToolResponse(unittest.TestCase):
         self.assertEqual(tc[0]['function']['name'], 'execute_services')
         self.assertIsNone(data['choices'][0]['message']['content'])
 
+    def test_execute_service_singular_normalized(self):
+        # Model sometimes emits execute_service (no trailing s) — proxy must fix it
+        content = json.dumps({
+            'name': 'execute_service',
+            'arguments': {
+                'list': [{'domain': 'light', 'service': 'turn_off',
+                          'service_data': {'entity_id': 'light.x'}}]
+            }
+        })
+        body = self._response(content)
+        out, status = proxy.rewrite_tool_response(body, known_entities={'light.x'})
+        self.assertEqual(status, 'tool_call')
+        tc = _d(out)['choices'][0]['message']['tool_calls']
+        self.assertEqual(tc[0]['function']['name'], 'execute_services')
+
     def test_plain_prose_passes_through(self):
         body = self._response('The lights are on.')
         out, status = proxy.rewrite_tool_response(body)

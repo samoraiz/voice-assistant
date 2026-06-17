@@ -942,6 +942,8 @@ def rewrite_tool_response(body_bytes, known_entities=None):
 
     if result is not None:
         fn_name, arguments = result
+        if fn_name == 'execute_service':
+            fn_name = 'execute_services'
         if _validate_tool_arguments(fn_name, arguments, known_entities):
             choice['message'] = {
                 'role': 'assistant',
