@@ -13,7 +13,8 @@ services:
       - "0"
     environment:
       - OLLAMA_KEEP_ALIVE=-1
-      - HAILO_OLLAMA_VDEVICE_GROUP_ID=SHARED   # share NPU with hailo-whisper
+      - HAILO_VDEVICE_GROUP_ID=SHARED          # share NPU with hailo-whisper (HailoRT standard var)
+      - HAILO_OLLAMA_VDEVICE_GROUP_ID=SHARED   # read by the proxy/entrypoint
       - XDG_DATA_HOME=/usr/local/share
       - LD_LIBRARY_PATH=/usr/lib
       # Override proxy inference defaults (v1.0.1+):
@@ -21,8 +22,13 @@ services:
       # - OLLAMA_PROXY_NUM_PREDICT=60
       # - OLLAMA_PROXY_MAX_TOKENS=120
     volumes:
-      # Model storage — actual host path is /usr/share/hailoollama (package install layout)
-      # Container expects it at /usr/local/share/hailo-ollama (XDG_DATA_HOME=/usr/local/share)
+      # Model storage. Two directories exist on the host after package install:
+      #   /usr/share/hailo-ollama/  — manifests (populated by package)
+      #   /usr/share/hailoollama/   — blob (populated by model download)
+      # The mount covers /usr/share/hailoollama. Copy manifests there so both
+      # pieces are visible to hailo-ollama inside the container:
+      #   sudo cp -r /usr/share/hailo-ollama/models/manifests \
+      #              /usr/share/hailoollama/models/
       - /usr/share/hailoollama:/usr/local/share/hailo-ollama
       # Hailo proprietary binaries — bind-mounted from host (not baked into image)
       - /usr/bin/hailo-ollama:/usr/local/bin/hailo-ollama:ro
