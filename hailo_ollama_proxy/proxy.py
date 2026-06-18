@@ -531,6 +531,11 @@ def inject_tool_prompt(body_bytes):
     if data.get('max_tokens', 0) < min_tool_tokens:
         data['max_tokens'] = min_tool_tokens
 
+    # Deterministic output for structured tool calls — reduces hallucination.
+    # retry-on-rejection still bumps to 0.7 on second attempts.
+    if 'temperature' not in data or data['temperature'] > 0:
+        data['temperature'] = 0
+
     return json.dumps(data).encode('utf-8'), True
 
 

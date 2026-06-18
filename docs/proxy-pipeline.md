@@ -12,8 +12,10 @@ order on each request:
    ignores them) and injects a worked example of the `execute_services`
    shape into the system message. On tool-result follow-up turns it skips
    the JSON example and asks for a one-sentence natural-language reply
-   instead. Returns a `tool_mode` ∈ `{False, True, 'followup'}` that drives
-   the response-side path.
+   instead. On tool turns it also forces `temperature=0` for deterministic
+   structured output (retry-on-rejection still bumps to 0.7). Returns a
+   `tool_mode` ∈ `{False, True, 'followup'}` that drives the response-side
+   path.
 3. **`sanitize_conversation_roles`** — converts OpenAI-only constructs
    (`assistant + tool_calls + null content`, `role:"tool"`) into plain
    `assistant`/`user` messages with stringified content. hailo-ollama's
