@@ -1,7 +1,7 @@
 {
-  "example": "turn off the lights: turn_off light.office_lights\nturn on the lamp: turn_on light.office_lights\ndim to 30%: turn_on light.office_lights brightness=30\nhow many lamps?: I found 2 lamps in your home.",
+  "example": "turn off the lights: turn_off light.office_lights | turn on the lamp: turn_on light.office_lights | dim to 30%: turn_on light.office_lights brightness=30 | how many lamps?: I found 2 lamps in your home.",
 
-  "instruction_template": " When the user wants to control a device, reply with ONLY a command: ACTION ENTITY [brightness=N]. Actions: turn_on, turn_off. For brightness add brightness=N (0-100). For questions, reply in plain text. Examples:\n{example}",
+  "instruction_template": " When the user wants to control a device, reply with ONLY a command line. Do NOT use JSON. Do NOT explain. Format: ACTION ENTITY [brightness=N]. Actions: turn_on, turn_off. Examples: {example}",
 
   "followup_hint": " The previous tool call already executed. Reply with one short sentence about what happened."
 }
