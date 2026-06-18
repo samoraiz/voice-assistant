@@ -819,6 +819,7 @@ def _scrub_arguments(args):
             if 'entity_id' not in sd:
                 sd['entity_id'] = item['entity_id']
             del item['entity_id']
+            sys.stderr.write('[proxy] scrub: promoted entity_id into service_data\n')
         sd = item.get('service_data')
         if isinstance(sd, dict) and 'entity_id' in sd:
             sd['entity_id'] = _clean_entity_id(sd['entity_id'])
@@ -925,6 +926,12 @@ def _validate_tool_arguments(fn_name, arguments, known_entities=None):
                 return False
             svc_data = item.get('service_data', {})
             entity_id = svc_data.get('entity_id')
+            # Defensive: promote entity_id from item level if _scrub_arguments missed it
+            if not entity_id and 'entity_id' in item:
+                entity_id = item.pop('entity_id')
+                svc_data['entity_id'] = entity_id
+                item['service_data'] = svc_data
+                sys.stderr.write('[proxy] validate: late-promoted entity_id into service_data\n')
             if not entity_id:
                 return False
             if known_entities is not None and entity_id not in known_entities:
@@ -993,6 +1000,7 @@ def rewrite_tool_response(body_bytes, known_entities=None):
 
     if result is not None:
         fn_name, arguments = result
+        sys.stderr.write('[proxy] parsed tool call: {} → {}\n'.format(fn_name, json.dumps(arguments)))
         if fn_name == 'execute_service':
             fn_name = 'execute_services'
         if not fn_name or not isinstance(fn_name, str) or fn_name.lower() == 'none':
