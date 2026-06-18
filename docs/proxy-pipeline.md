@@ -3,29 +3,34 @@
 ## Why the proxy is more than a passthrough
 
 `hailo-ollama` does not implement `/v1/*` and rejects several constructs that
-HA happily sends. The proxy bridges this. There are five layers, applied in
+HA happily sends. The proxy bridges this. There are six layers, applied in
 order on each request:
 
 1. **`fix_json_control_chars`** — HA sends literal `U+000A` inside JSON
    strings; HailoRT rejects this. Re-encodes control chars before parse.
 2. **`inject_tool_prompt`** — strips `tools`/`tool_choice` (hailo-ollama
    ignores them) and injects a simple command-line format instruction into
-   the system message: `ACTION ENTITY [brightness=N]` (e.g.
-   `turn_off light.office_lights`). This replaced the previous nested-JSON
-   example because `qwen2.5:1.5b` cannot reliably produce ~50-token 4-level
-   JSON. The command format needs ~15 tokens and the proxy constructs the
-   full tool-call JSON from it. On tool-result follow-up turns it skips
-   the command instruction and asks for a one-sentence natural-language
-   reply instead. Returns a `tool_mode` ∈ `{False, True, 'followup'}`
-   that drives the response-side path.
+   the system message: `ACTION ENTITY [PARAM=N]` (e.g.
+   `turn_off light.office_lights`, `open cover.bedroom_blinds`). This
+   replaced the previous nested-JSON example because `qwen2.5:1.5b` cannot
+   reliably produce ~50-token 4-level JSON. The command format needs ~15
+   tokens and the proxy constructs the full tool-call JSON from it. On
+   tool-result follow-up turns it skips the command instruction and asks
+   for a one-sentence natural-language reply instead. Returns a
+   `tool_mode` ∈ `{False, True, 'followup'}` that drives the response-side
+   path.
 3. **`sanitize_conversation_roles`** — converts OpenAI-only constructs
    (`assistant + tool_calls + null content`, `role:"tool"`) into plain
    `assistant`/`user` messages with stringified content. hailo-ollama's
    oatpp/C++ layer null-pointer-crashes on the originals.
-4. **`sanitize_for_hailo`** (marker `hailo-sanitize-v1`) — replaces
+4. **`prune_conversation_history`** — estimates tokens at ~3.5 chars/token
+   and drops the oldest non-system messages when the total exceeds
+   `num_ctx - max_tokens - 64`. Always keeps the system message and at
+   least the last 4 messages (2 conversation turns).
+5. **`sanitize_for_hailo`** (marker `hailo-sanitize-v1`) — replaces
    newlines/CR/TAB inside `messages[].content`, `prompt`, `system` with
    spaces so HailoRT's prompt renderer never re-serialises a control char.
-5. **`inject_defaults`** (marker `hailo-latency-v5`) — caps `max_tokens`,
+6. **`inject_defaults`** (marker `hailo-latency-v5`) — caps `max_tokens`,
    `num_predict`, `num_ctx` for short voice prompts.
 
 Response side runs `rewrite_tool_response` (when `tool_mode is True`) or
@@ -112,13 +117,49 @@ summary. Two layered defences here:
 ### Prompt format — command-line instead of JSON
 
 The prompt teaches the model a simple one-line format:
-`ACTION ENTITY [brightness=N]`. Examples are colon-separated
+`ACTION ENTITY [PARAM=N]`. Examples are colon-separated
 (request: response). The proxy regex parses this and constructs the full
 `execute_services` JSON. This replaced the previous nested-JSON examples
 after four rounds showed `qwen2.5:1.5b` cannot reliably produce 4-level
 nested JSON (~50 tokens). The command format uses ~15 tokens and
 eliminates wrong-level entity_id, empty lists, and service hallucinations.
 JSON parsing is kept as a fallback.
+
+Supported domains and action mapping:
+
+| Domain | Actions recognised | HA service |
+|--------|-------------------|------------|
+| `light.*` | `turn_on`, `turn_off`, `dim`, `set`, `brighten`, `darken` | `turn_on` / `turn_off` |
+| `switch.*` | `turn_on`, `turn_off` | `turn_on` / `turn_off` |
+| `cover.*` | `open`, `close`, `stop`, `turn_on`→`open_cover`, `turn_off`→`close_cover` | `open_cover` / `close_cover` / `stop_cover` / `set_cover_position` |
+| `lock.*` | `lock`, `unlock`, `turn_on`→`lock`, `turn_off`→`unlock` | `lock` / `unlock` |
+| `scene.*` | `turn_on` | `turn_on` |
+
+Parameters: `brightness=N` (lights, 0-100), `position=N` (covers, 0-100).
+
+### Fuzzy entity matching
+
+When exact entity validation fails, `_fuzzy_match_entity` normalizes
+tokens (strips numeric suffixes and simple plurals) and computes Jaccard
+similarity against same-domain known entities. Exactly one candidate
+scoring ≥ 0.5 is accepted; ambiguous matches are rejected. Handles the
+common model hallucination of `light.living_room_lamps_2` →
+`light.living_room_lamp_1`.
+
+### User-text brightness/position extraction
+
+When the model outputs `turn_on light.x` without `brightness_pct` but
+the user's message contains "dim to 80%" or similar, the proxy extracts
+the value from user text and injects it into the tool call. Prevents the
+"lying follow-up" where the model claims it set brightness but didn't.
+
+### Context window pruning
+
+`prune_conversation_history` estimates the token count of the full
+message array and drops the oldest non-system messages when the total
+approaches `num_ctx - max_tokens`. Always keeps the system message and
+at least the last 4 messages (2 conversation turns). Prevents context
+overflow in long multi-turn conversations.
 
 ### Known unfixable in proxy
 
@@ -127,8 +168,8 @@ JSON parsing is kept as a fallback.
   number is wrong. Model bug.
 - **On/off entity hallucination.** Model intermittently picks a
   Zigbee-style id (`light.0x001788010315dcf2`) for "office lights". The
-  allowlist silences the failure but the action does not run. Would need
-  retry-on-rejection or a different model.
-- **Lying follow-up.** Model emits a clean `turn_on` *without*
-  `brightness_pct`, then says "dimmed to 20 percent" anyway. Future work:
-  cross-check follow-up text against the tool-call arguments.
+  fuzzy matcher silences it if a real entity is close enough; otherwise
+  the allowlist rejects it silently.
+- **Lying follow-up.** Partially mitigated by user-text brightness
+  extraction. Remaining case: model says "dimmed to 20%" when the user
+  didn't request a brightness value at all.

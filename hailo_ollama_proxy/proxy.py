@@ -428,6 +428,65 @@ def sanitize_conversation_roles(body_bytes):
     return json.dumps(data).encode('utf-8')
 
 
+def prune_conversation_history(body_bytes):
+    """Drop oldest conversation turns when messages approach the context window.
+
+    HA sends the full conversation history on every request. With num_ctx=2048,
+    a long conversation (system prompt ~700 tokens + entity list + tool
+    instruction + history) can overflow, causing hailo-ollama to silently
+    truncate the prompt and lose the latest user message.
+
+    This layer estimates the token count and drops the oldest non-system
+    messages until the total fits within ``num_ctx - max_tokens - margin``.
+    Always keeps the system message (index 0) and at least the last 4
+    messages (2 conversation turns).
+    """
+    try:
+        data = json.loads(body_bytes.decode('utf-8'))
+    except Exception:
+        return body_bytes
+
+    messages = data.get('messages', [])
+    if len(messages) <= 5:
+        return body_bytes
+
+    budget = ARGS.num_ctx - ARGS.max_tokens - 64
+
+    def est_tokens(msg):
+        content = msg.get('content') or ''
+        return len(content) / 3.5 + 4
+
+    total = sum(est_tokens(m) for m in messages)
+    if total <= budget:
+        return body_bytes
+
+    sys_tokens = est_tokens(messages[0]) if messages else 0
+
+    tail_tokens = 0
+    keep_from = len(messages)
+    for i in range(len(messages) - 1, 0, -1):
+        t = est_tokens(messages[i])
+        if sys_tokens + tail_tokens + t > budget:
+            break
+        tail_tokens += t
+        keep_from = i
+
+    keep_from = min(keep_from, max(1, len(messages) - 4))
+    pruned = [messages[0]] + messages[keep_from:]
+    dropped = len(messages) - len(pruned)
+
+    if dropped > 0:
+        sys.stderr.write(
+            '[proxy] pruned {} old messages (~{:.0f} → ~{:.0f} est. tokens, budget ~{})\n'
+            .format(dropped, total,
+                    sum(est_tokens(m) for m in pruned),
+                    budget))
+        data['messages'] = pruned
+        return json.dumps(data).encode('utf-8')
+
+    return body_bytes
+
+
 def _is_tool_result_followup(messages):
     """True if the request is HA echoing a tool result for natural-language summary.
 
@@ -829,7 +888,10 @@ def _scrub_arguments(args):
 
 
 _COMMAND_LINE_RE = re.compile(
-    r'(turn_on|turn_off|dim|set|set_brightness|brighten|darken)'
+    r'(turn_on|turn_off'
+    r'|dim|set|set_brightness|brighten|darken'
+    r'|open|close|stop|open_cover|close_cover|stop_cover'
+    r'|lock|unlock)'
     r'\s+'
     r'["\']?'
     r'([a-z_]+\.[a-zA-Z0-9_]+)'
@@ -840,7 +902,9 @@ _COMMAND_LINE_RE = re.compile(
 )
 
 _COMMAND_LINE_QUICK_RE = re.compile(
-    r'\b(?:turn_(on|off)|dim|set_brightness|brighten|darken)\s+[a-z_]+\.'
+    r'\b(?:turn_(on|off)|dim|set_brightness|brighten|darken'
+    r'|open|close|stop|open_cover|close_cover|stop_cover'
+    r'|lock|unlock)\s+[a-z_]+\.'
 )
 
 
@@ -877,21 +941,49 @@ def _try_parse_command_line(text):
         for pair in kv_str.split():
             if '=' in pair:
                 k, v = pair.split('=', 1)
+                v_clean = re.sub(r'[^0-9]', '', v)
+                if not v_clean:
+                    continue
+                val = int(v_clean)
                 if k in ('brightness', 'brightness_pct', 'level',
                          'dim', 'pct', 'value', 'percent'):
-                    v = re.sub(r'[^0-9]', '', v)
-                    if v:
-                        bp = int(v)
-                        if bp > 100:
-                            bp = max(0, min(100, round(bp * 100 / 255)))
-                        service_data['brightness_pct'] = bp
+                    if val > 100:
+                        val = max(0, min(100, round(val * 100 / 255)))
+                    service_data['brightness_pct'] = val
+                elif k in ('position', 'cover_position'):
+                    service_data['position'] = max(0, min(100, val))
 
-    # Normalize brightness-related actions to turn_on
+    # Map action → HA service name
     service = action
     if service in ('dim', 'set', 'set_brightness', 'brighten', 'darken'):
         service = 'turn_on'
+    elif service in ('open', 'open_cover'):
+        service = 'open_cover'
+    elif service in ('close', 'close_cover'):
+        service = 'close_cover'
+    elif service in ('stop', 'stop_cover'):
+        service = 'stop_cover'
+    elif service == 'lock':
+        service = 'lock'
+    elif service == 'unlock':
+        service = 'unlock'
+
+    # Domain-specific service mapping: turn_on/turn_off → native service
+    if domain == 'cover':
+        if service == 'turn_on':
+            service = 'open_cover'
+        elif service == 'turn_off':
+            service = 'close_cover'
+    elif domain == 'lock':
+        if service == 'turn_on':
+            service = 'lock'
+        elif service == 'turn_off':
+            service = 'unlock'
+
     if 'brightness_pct' in service_data and service == 'turn_off':
         service = 'turn_on'
+    if 'position' in service_data and service in ('open_cover', 'close_cover'):
+        service = 'set_cover_position'
 
     return 'execute_services', {
         'list': [{'domain': domain, 'service': service,
@@ -1378,6 +1470,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         len(known_entities), len(light_ents),
                         ' '.join(light_ents[:10]) + (' ...' if len(light_ents) > 10 else '')))
             body = sanitize_conversation_roles(body)         # fix null content / tool roles
+            body = prune_conversation_history(body)           # drop old turns if near num_ctx
             body = sanitize_for_hailo(body)                  # collapse newlines
             body = inject_defaults(body, self.path)
         try:

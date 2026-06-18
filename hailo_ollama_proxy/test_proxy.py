@@ -1098,6 +1098,118 @@ class TestTryParseCommandLine(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result[1]['list'][0]['service_data']['brightness_pct'], 40)
 
+    # --- Cover domain ---
+
+    def test_open_cover(self):
+        result = proxy._try_parse_command_line('open cover.bedroom_blinds')
+        self.assertIsNotNone(result)
+        item = result[1]['list'][0]
+        self.assertEqual(item['domain'], 'cover')
+        self.assertEqual(item['service'], 'open_cover')
+
+    def test_close_cover(self):
+        result = proxy._try_parse_command_line('close cover.bedroom_blinds')
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1]['list'][0]['service'], 'close_cover')
+
+    def test_turn_on_cover_maps_to_open(self):
+        result = proxy._try_parse_command_line('turn_on cover.x')
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1]['list'][0]['service'], 'open_cover')
+
+    def test_turn_off_cover_maps_to_close(self):
+        result = proxy._try_parse_command_line('turn_off cover.x')
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1]['list'][0]['service'], 'close_cover')
+
+    def test_cover_position(self):
+        result = proxy._try_parse_command_line('open cover.x position=50')
+        self.assertIsNotNone(result)
+        item = result[1]['list'][0]
+        self.assertEqual(item['service'], 'set_cover_position')
+        self.assertEqual(item['service_data']['position'], 50)
+
+    def test_stop_cover(self):
+        result = proxy._try_parse_command_line('stop cover.x')
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1]['list'][0]['service'], 'stop_cover')
+
+    # --- Switch domain ---
+
+    def test_switch_turn_on(self):
+        result = proxy._try_parse_command_line('turn_on switch.fan')
+        self.assertIsNotNone(result)
+        item = result[1]['list'][0]
+        self.assertEqual(item['domain'], 'switch')
+        self.assertEqual(item['service'], 'turn_on')
+
+    # --- Lock domain ---
+
+    def test_lock(self):
+        result = proxy._try_parse_command_line('lock lock.front_door')
+        self.assertIsNotNone(result)
+        item = result[1]['list'][0]
+        self.assertEqual(item['domain'], 'lock')
+        self.assertEqual(item['service'], 'lock')
+
+    def test_unlock(self):
+        result = proxy._try_parse_command_line('unlock lock.front_door')
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1]['list'][0]['service'], 'unlock')
+
+    def test_turn_on_lock_maps_to_lock(self):
+        result = proxy._try_parse_command_line('turn_on lock.front_door')
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1]['list'][0]['service'], 'lock')
+
+    # --- Scene domain ---
+
+    def test_scene_turn_on(self):
+        result = proxy._try_parse_command_line('turn_on scene.movie_night')
+        self.assertIsNotNone(result)
+        item = result[1]['list'][0]
+        self.assertEqual(item['domain'], 'scene')
+        self.assertEqual(item['service'], 'turn_on')
+
+
+# ---------------------------------------------------------------------------
+# prune_conversation_history
+# ---------------------------------------------------------------------------
+
+class TestPruneConversationHistory(unittest.TestCase):
+
+    def _body(self, sys_content, turns):
+        """Build a request body with a system message and N user/assistant pairs."""
+        messages = [{'role': 'system', 'content': sys_content}]
+        for i in range(turns):
+            messages.append({'role': 'user', 'content': 'message {}'.format(i)})
+            messages.append({'role': 'assistant', 'content': 'reply {}'.format(i)})
+        return _j({'messages': messages})
+
+    def test_short_conversation_unchanged(self):
+        body = self._body('sys', 2)
+        self.assertEqual(proxy.prune_conversation_history(body), body)
+
+    @patch.object(proxy, 'ARGS', SimpleNamespace(num_ctx=200, max_tokens=50, log_level='info'))
+    def test_long_conversation_pruned(self):
+        body = self._body('A' * 400, 10)
+        result = proxy.prune_conversation_history(body)
+        data = json.loads(result.decode('utf-8'))
+        self.assertLess(len(data['messages']), 22)
+        self.assertEqual(data['messages'][0]['role'], 'system')
+        self.assertEqual(data['messages'][-1]['role'], 'assistant')
+
+    @patch.object(proxy, 'ARGS', SimpleNamespace(num_ctx=200, max_tokens=50, log_level='info'))
+    def test_keeps_at_least_last_4_messages(self):
+        body = self._body('A' * 400, 10)
+        result = proxy.prune_conversation_history(body)
+        data = json.loads(result.decode('utf-8'))
+        self.assertGreaterEqual(len(data['messages']), 5)
+
+    def test_invalid_json_passthrough(self):
+        body = b'not json'
+        self.assertEqual(proxy.prune_conversation_history(body), body)
+
 
 # ---------------------------------------------------------------------------
 # _looks_like_command
@@ -1116,6 +1228,15 @@ class TestLooksLikeCommand(unittest.TestCase):
 
     def test_true_when_embedded_in_prose(self):
         self.assertTrue(proxy._looks_like_command('Sure: turn_off light.x'))
+
+    def test_true_for_open_cover(self):
+        self.assertTrue(proxy._looks_like_command('open cover.blinds'))
+
+    def test_true_for_close_cover(self):
+        self.assertTrue(proxy._looks_like_command('close cover.blinds'))
+
+    def test_true_for_lock(self):
+        self.assertTrue(proxy._looks_like_command('lock lock.front_door'))
 
 
 # ---------------------------------------------------------------------------
