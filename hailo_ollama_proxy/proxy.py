@@ -835,7 +835,7 @@ _COMMAND_LINE_RE = re.compile(
     r'([a-z_]+\.[a-zA-Z0-9_]+)'
     r'["\']?'
     r'((?:\s+\w+=\S+)*)'
-    r'\s*$',
+    r'.*$',
     re.MULTILINE,
 )
 
