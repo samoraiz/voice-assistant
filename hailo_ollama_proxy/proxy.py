@@ -436,11 +436,15 @@ def _is_tool_result_followup(messages):
     summarise the outcome. Injecting JSON-only instructions on this turn makes
     the model emit another (empty) tool call — which then fails validation and
     leaves raw JSON in the spoken response.
+
+    Only the LAST message matters: if a tool result sits further back in history
+    but the final message is a new user turn ("turn it back on"), this is a new
+    command — not a follow-up.
     """
-    for msg in messages:
-        if msg.get('role') == 'tool':
-            return True
-    return False
+    if not messages:
+        return False
+    last = messages[-1]
+    return last.get('role') == 'tool'
 
 
 def inject_tool_prompt(body_bytes):
@@ -530,11 +534,6 @@ def inject_tool_prompt(body_bytes):
     min_tool_tokens = max(ARGS.max_tokens, 250)
     if data.get('max_tokens', 0) < min_tool_tokens:
         data['max_tokens'] = min_tool_tokens
-
-    # Deterministic output for structured tool calls — reduces hallucination.
-    # retry-on-rejection still bumps to 0.7 on second attempts.
-    if 'temperature' not in data or data['temperature'] > 0:
-        data['temperature'] = 0
 
     return json.dumps(data).encode('utf-8'), True
 
