@@ -863,6 +863,43 @@ def _try_parse_tool_call(text):
     except Exception:
         pass
 
+    # Pattern: JSON embedded in prose — model wraps the call in explanation text.
+    # Find the outermost { ... } that contains "name" or "list".
+    start = text.find('{')
+    if start >= 0:
+        # Walk from the end to find the matching closing brace
+        depth = 0
+        end = -1
+        in_str = False
+        esc = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if esc:
+                esc = False
+            elif ch == '\\' and in_str:
+                esc = True
+            elif ch == '"':
+                in_str = not in_str
+            elif not in_str:
+                if ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+        if end > start:
+            fragment = _merge_duplicate_service_data(_fix_json(text[start:end]))
+            try:
+                parsed = json.loads(fragment)
+                if isinstance(parsed, dict):
+                    if 'name' in parsed and 'arguments' in parsed:
+                        return parsed['name'], _scrub_arguments(parsed['arguments'])
+                    if 'list' in parsed:
+                        return 'execute_services', _scrub_arguments(parsed)
+            except Exception:
+                pass
+
     return None
 
 
@@ -900,10 +937,13 @@ def _validate_tool_arguments(fn_name, arguments, known_entities=None):
 
 
 def _looks_like_json(text):
-    """Cheap heuristic: model output that opens with `{` or ```` ``` ```` is
-    structured JSON we don't want HA's TTS reading aloud verbatim."""
+    """Cheap heuristic: model output that contains structured JSON we don't
+    want HA's TTS reading aloud verbatim.  Checks both leading-JSON and
+    JSON embedded in prose (model wraps output in explanation text)."""
     s = text.lstrip()
-    return s.startswith('{') or s.startswith('```') or s.startswith('"{')
+    if s.startswith('{') or s.startswith('```') or s.startswith('"{'):
+        return True
+    return '```' in text or '"execute_services"' in text or '"service_data"' in text
 
 
 def rewrite_tool_response(body_bytes, known_entities=None):
