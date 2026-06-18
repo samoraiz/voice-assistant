@@ -887,6 +887,23 @@ def _scrub_arguments(args):
     return args
 
 
+_NAMED_COLORS = {
+    'red':    [255, 0, 0],
+    'green':  [0, 128, 0],
+    'blue':   [0, 0, 255],
+    'yellow': [255, 255, 0],
+    'orange': [255, 165, 0],
+    'purple': [128, 0, 128],
+    'violet': [128, 0, 128],
+    'pink':   [255, 192, 203],
+    'cyan':   [0, 255, 255],
+    'white':  [255, 255, 255],
+    'warm':   'warm',
+    'warm_white': 'warm',
+    'cool':   'cool',
+    'cool_white': 'cool',
+}
+
 _COMMAND_LINE_RE = re.compile(
     r'(turn_on|turn_off'
     r'|dim|set|set_brightness|brighten|darken'
@@ -939,19 +956,29 @@ def _try_parse_command_line(text):
 
     if kv_str:
         for pair in kv_str.split():
-            if '=' in pair:
-                k, v = pair.split('=', 1)
-                v_clean = re.sub(r'[^0-9]', '', v)
-                if not v_clean:
-                    continue
-                val = int(v_clean)
-                if k in ('brightness', 'brightness_pct', 'level',
-                         'dim', 'pct', 'value', 'percent'):
-                    if val > 100:
-                        val = max(0, min(100, round(val * 100 / 255)))
-                    service_data['brightness_pct'] = val
-                elif k in ('position', 'cover_position'):
-                    service_data['position'] = max(0, min(100, val))
+            if '=' not in pair:
+                continue
+            k, v = pair.split('=', 1)
+            if k in ('color', 'colour', 'rgb', 'color_name'):
+                color = _NAMED_COLORS.get(v.lower().strip('"\''))
+                if isinstance(color, list):
+                    service_data['rgb_color'] = color
+                elif color == 'warm':
+                    service_data['color_temp_kelvin'] = 2700
+                elif color == 'cool':
+                    service_data['color_temp_kelvin'] = 6500
+                continue
+            v_clean = re.sub(r'[^0-9]', '', v)
+            if not v_clean:
+                continue
+            val = int(v_clean)
+            if k in ('brightness', 'brightness_pct', 'level',
+                     'dim', 'pct', 'value', 'percent'):
+                if val > 100:
+                    val = max(0, min(100, round(val * 100 / 255)))
+                service_data['brightness_pct'] = val
+            elif k in ('position', 'cover_position'):
+                service_data['position'] = max(0, min(100, val))
 
     # Map action → HA service name
     service = action
@@ -1206,6 +1233,37 @@ def _extract_user_brightness(user_text):
     return None
 
 
+_USER_COLOR_RE = re.compile(
+    r'\b(?:colo(?:u?r)|change|set|make)\s+'
+    r'(?:\w+\s+)*?'
+    r'(?:(?:to|into)\s+)?'
+    r'(?:a\s+)?(?:(?:dark|light|bright|deep)\s+)?'
+    r'(' + '|'.join(sorted(_NAMED_COLORS.keys(), key=len, reverse=True)) + r')\b',
+    re.IGNORECASE,
+)
+
+
+def _extract_user_color(user_text):
+    """Extract a named color from the user's spoken request.
+
+    Returns a service_data dict fragment (rgb_color or color_temp_kelvin),
+    or None if no color intent is found.
+    """
+    if not user_text:
+        return None
+    m = _USER_COLOR_RE.search(user_text)
+    if not m:
+        return None
+    color = _NAMED_COLORS.get(m.group(1).lower())
+    if isinstance(color, list):
+        return {'rgb_color': color}
+    if color == 'warm':
+        return {'color_temp_kelvin': 2700}
+    if color == 'cool':
+        return {'color_temp_kelvin': 6500}
+    return None
+
+
 def rewrite_tool_response(body_bytes, known_entities=None, user_text=None):
     """hailo-tools-v1 (response side)
 
@@ -1271,21 +1329,29 @@ def rewrite_tool_response(body_bytes, known_entities=None, user_text=None):
             sys.stderr.write('[proxy] unknown function {!r} — only execute_services is supported\n'
                              .format(fn_name))
         elif _validate_tool_arguments(fn_name, arguments, known_entities):
-            # If the user asked for a brightness change but the model forgot
-            # to include it, extract from user text and inject.
+            # If the user asked for brightness/color but the model forgot,
+            # extract from user text and inject.
             if user_text and fn_name == 'execute_services':
                 user_bp = _extract_user_brightness(user_text)
-                if user_bp is not None:
-                    for item in arguments.get('list', []):
-                        sd = item.get('service_data', {})
-                        if 'brightness_pct' not in sd:
-                            sd['brightness_pct'] = user_bp
-                            item['service_data'] = sd
-                            if item.get('service') == 'turn_off':
-                                item['service'] = 'turn_on'
-                            sys.stderr.write(
-                                '[proxy] injected brightness_pct={} from user text\n'
-                                .format(user_bp))
+                user_color = _extract_user_color(user_text)
+                for item in arguments.get('list', []):
+                    sd = item.get('service_data', {})
+                    if user_bp is not None and 'brightness_pct' not in sd:
+                        sd['brightness_pct'] = user_bp
+                        item['service_data'] = sd
+                        if item.get('service') == 'turn_off':
+                            item['service'] = 'turn_on'
+                        sys.stderr.write(
+                            '[proxy] injected brightness_pct={} from user text\n'
+                            .format(user_bp))
+                    if user_color and 'rgb_color' not in sd and 'color_temp_kelvin' not in sd:
+                        sd.update(user_color)
+                        item['service_data'] = sd
+                        if item.get('service') == 'turn_off':
+                            item['service'] = 'turn_on'
+                        sys.stderr.write(
+                            '[proxy] injected {} from user text\n'
+                            .format(user_color))
             choice['message'] = {
                 'role': 'assistant',
                 'content': None,

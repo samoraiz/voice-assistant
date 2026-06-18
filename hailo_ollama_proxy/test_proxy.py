@@ -1392,5 +1392,88 @@ class TestExtractUserBrightness(unittest.TestCase):
         self.assertIsNone(proxy._extract_user_brightness('dim to 0%'))
 
 
+# ---------------------------------------------------------------------------
+# _extract_user_color
+# ---------------------------------------------------------------------------
+
+class TestExtractUserColor(unittest.TestCase):
+
+    def test_color_to_blue(self):
+        self.assertEqual(proxy._extract_user_color('change colour to blue'),
+                         {'rgb_color': [0, 0, 255]})
+
+    def test_color_red(self):
+        self.assertEqual(proxy._extract_user_color('color to red'),
+                         {'rgb_color': [255, 0, 0]})
+
+    def test_change_to_warm(self):
+        self.assertEqual(proxy._extract_user_color('change to warm'),
+                         {'color_temp_kelvin': 2700})
+
+    def test_change_to_cool_white(self):
+        self.assertEqual(proxy._extract_user_color('change to cool white'),
+                         {'color_temp_kelvin': 6500})
+
+    def test_dark_blue(self):
+        result = proxy._extract_user_color('change to dark blue')
+        self.assertEqual(result, {'rgb_color': [0, 0, 255]})
+
+    def test_no_color_intent(self):
+        self.assertIsNone(proxy._extract_user_color('turn on lamp 1'))
+
+    def test_none_input(self):
+        self.assertIsNone(proxy._extract_user_color(None))
+
+
+# ---------------------------------------------------------------------------
+# command-line color parsing
+# ---------------------------------------------------------------------------
+
+class TestCommandLineColor(unittest.TestCase):
+
+    def _response(self, content):
+        return _j({
+            'choices': [{'message': {'role': 'assistant', 'content': content},
+                         'finish_reason': 'stop'}]
+        })
+
+    def test_color_param_parsed(self):
+        result = proxy._try_parse_command_line('turn_on light.x color=blue')
+        self.assertIsNotNone(result)
+        sd = result[1]['list'][0]['service_data']
+        self.assertEqual(sd['rgb_color'], [0, 0, 255])
+
+    def test_color_warm(self):
+        result = proxy._try_parse_command_line('turn_on light.x color=warm')
+        sd = result[1]['list'][0]['service_data']
+        self.assertEqual(sd['color_temp_kelvin'], 2700)
+
+    def test_color_and_brightness(self):
+        result = proxy._try_parse_command_line('turn_on light.x brightness=50 color=red')
+        sd = result[1]['list'][0]['service_data']
+        self.assertEqual(sd['brightness_pct'], 50)
+        self.assertEqual(sd['rgb_color'], [255, 0, 0])
+
+    def test_user_text_color_injection(self):
+        body = self._response('turn_on light.x')
+        out, status = proxy.rewrite_tool_response(
+            body, known_entities={'light.x'},
+            user_text='change colour of lamp to blue')
+        self.assertEqual(status, 'tool_call')
+        data = _d(out)
+        args = json.loads(data['choices'][0]['message']['tool_calls'][0]['function']['arguments'])
+        self.assertEqual(args['list'][0]['service_data']['rgb_color'], [0, 0, 255])
+
+    def test_no_color_injection_when_already_present(self):
+        body = self._response('turn_on light.x color=red')
+        out, status = proxy.rewrite_tool_response(
+            body, known_entities={'light.x'},
+            user_text='change colour to blue')
+        self.assertEqual(status, 'tool_call')
+        data = _d(out)
+        args = json.loads(data['choices'][0]['message']['tool_calls'][0]['function']['arguments'])
+        self.assertEqual(args['list'][0]['service_data']['rgb_color'], [255, 0, 0])
+
+
 if __name__ == '__main__':
     unittest.main()
