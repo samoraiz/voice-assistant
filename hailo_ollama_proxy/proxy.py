@@ -531,7 +531,7 @@ def inject_tool_prompt(body_bytes):
     # inject_defaults caps max_tokens at ARGS.max_tokens (default 120) to limit
     # runaway generation, but that floor is too low for a pretty-printed tool call
     # (~150-200 tokens). Override upward here so inject_defaults won't clamp it back.
-    min_tool_tokens = max(ARGS.max_tokens, 250)
+    min_tool_tokens = max(ARGS.max_tokens, 80)
     if data.get('max_tokens', 0) < min_tool_tokens:
         data['max_tokens'] = min_tool_tokens
 
@@ -828,6 +828,73 @@ def _scrub_arguments(args):
     return args
 
 
+_COMMAND_LINE_RE = re.compile(
+    r'(turn_on|turn_off)'
+    r'\s+'
+    r'["\']?'
+    r'([a-z_]+\.[a-zA-Z0-9_]+)'
+    r'["\']?'
+    r'((?:\s+\w+=\S+)*)'
+    r'\s*$',
+    re.MULTILINE,
+)
+
+_COMMAND_LINE_QUICK_RE = re.compile(r'\bturn_(on|off)\s+[a-z_]+\.')
+
+
+def _looks_like_command(text):
+    """Cheap heuristic: text contains a command-line device action."""
+    return bool(_COMMAND_LINE_QUICK_RE.search(text))
+
+
+def _try_parse_command_line(text):
+    """Parse simple command format: ``turn_off light.x [brightness=30]``.
+
+    Returns ``('execute_services', arguments_dict)`` or ``None``.
+    The arguments_dict matches the shape _validate_tool_arguments expects.
+    This is the PRIMARY parser — tried before _try_parse_tool_call.
+    """
+    cleaned = text.strip()
+    if '```' in cleaned:
+        cleaned = re.sub(r'```[a-z]*\n?', '', cleaned).strip()
+    cleaned = re.sub(r'turn\s+off', 'turn_off', cleaned)
+    cleaned = re.sub(r'turn\s+on', 'turn_on', cleaned)
+
+    m = _COMMAND_LINE_RE.search(cleaned)
+    if not m:
+        return None
+
+    action = m.group(1)
+    entity_id = _clean_entity_id(m.group(2))
+    kv_str = m.group(3).strip()
+
+    domain = entity_id.split('.')[0] if '.' in entity_id else 'light'
+    service_data = {'entity_id': entity_id}
+
+    if kv_str:
+        for pair in kv_str.split():
+            if '=' in pair:
+                k, v = pair.split('=', 1)
+                if k in ('brightness', 'brightness_pct', 'level',
+                         'dim', 'pct', 'value', 'percent'):
+                    try:
+                        bp = int(v)
+                        if bp > 100:
+                            bp = max(0, min(100, round(bp * 100 / 255)))
+                        service_data['brightness_pct'] = bp
+                    except ValueError:
+                        pass
+
+    service = action
+    if 'brightness_pct' in service_data and service == 'turn_off':
+        service = 'turn_on'
+
+    return 'execute_services', {
+        'list': [{'domain': domain, 'service': service,
+                  'service_data': service_data}],
+    }
+
+
 def _try_parse_tool_call(text):
     """Extract (fn_name, arguments_dict) from model output, or return None.
 
@@ -995,11 +1062,17 @@ def rewrite_tool_response(body_bytes, known_entities=None):
         return body_bytes, 'tool_call'
 
     content = message.get('content') or ''
-    result = _try_parse_tool_call(content)
+    result = _try_parse_command_line(content)
+    if result is not None:
+        sys.stderr.write('[proxy] parsed command: {}\n'.format(content.strip()[:120]))
+    if result is None:
+        result = _try_parse_tool_call(content)
+        if result is not None:
+            sys.stderr.write('[proxy] parsed tool call (JSON fallback): {}\n'
+                             .format(content.strip()[:120]))
 
     if result is not None:
         fn_name, arguments = result
-        sys.stderr.write('[proxy] parsed tool call: {} → {}\n'.format(fn_name, json.dumps(arguments)))
         if fn_name == 'execute_service':
             fn_name = 'execute_services'
         if not fn_name or not isinstance(fn_name, str) or fn_name.lower() == 'none':
@@ -1033,10 +1106,10 @@ def rewrite_tool_response(body_bytes, known_entities=None):
             )
         # Fall through to JSON-blanking below: we won't speak the bad call.
 
-    if _looks_like_json(content):
-        # Parsed-but-invalid or unparseable JSON-shaped output — silence it so
-        # HA does not read "name execute services arguments list" aloud.
-        sys.stderr.write('[proxy] suppressed JSON-shaped content from spoken response\n')
+    if _looks_like_json(content) or _looks_like_command(content):
+        # Parsed-but-invalid or unparseable structured output — silence it so
+        # HA does not read "turn_off light dot office" or raw JSON aloud.
+        sys.stderr.write('[proxy] suppressed structured content from spoken response\n')
         message['content'] = ''
         choice['message'] = message
         resp['choices'] = [choice]
@@ -1104,8 +1177,8 @@ def truncate_followup_response(body_bytes):
     if not isinstance(content, str) or not content.strip():
         return body_bytes
 
-    if _looks_like_json(content):
-        sys.stderr.write('[proxy] suppressed JSON-shaped content from follow-up reply\n')
+    if _looks_like_json(content) or _looks_like_command(content):
+        sys.stderr.write('[proxy] suppressed structured content from follow-up reply\n')
         message['content'] = ''
         choice['message'] = message
         resp['choices'] = [choice]

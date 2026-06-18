@@ -9,13 +9,15 @@ order on each request:
 1. **`fix_json_control_chars`** — HA sends literal `U+000A` inside JSON
    strings; HailoRT rejects this. Re-encodes control chars before parse.
 2. **`inject_tool_prompt`** — strips `tools`/`tool_choice` (hailo-ollama
-   ignores them) and injects a worked example of the `execute_services`
-   shape into the system message. On tool-result follow-up turns it skips
-   the JSON example and asks for a one-sentence natural-language reply
-   instead. On tool turns it also forces `temperature=0` for deterministic
-   structured output (retry-on-rejection still bumps to 0.7). Returns a
-   `tool_mode` ∈ `{False, True, 'followup'}` that drives the response-side
-   path.
+   ignores them) and injects a simple command-line format instruction into
+   the system message: `ACTION ENTITY [brightness=N]` (e.g.
+   `turn_off light.office_lights`). This replaced the previous nested-JSON
+   example because `qwen2.5:1.5b` cannot reliably produce ~50-token 4-level
+   JSON. The command format needs ~15 tokens and the proxy constructs the
+   full tool-call JSON from it. On tool-result follow-up turns it skips
+   the command instruction and asks for a one-sentence natural-language
+   reply instead. Returns a `tool_mode` ∈ `{False, True, 'followup'}`
+   that drives the response-side path.
 3. **`sanitize_conversation_roles`** — converts OpenAI-only constructs
    (`assistant + tool_calls + null content`, `role:"tool"`) into plain
    `assistant`/`user` messages with stringified content. hailo-ollama's
@@ -28,6 +30,12 @@ order on each request:
 
 Response side runs `rewrite_tool_response` (when `tool_mode is True`) or
 `truncate_followup_response` (when `tool_mode == 'followup'`).
+
+`rewrite_tool_response` tries two parsers in order:
+1. **`_try_parse_command_line`** — regex for `turn_on|turn_off ENTITY [k=v]`.
+   Constructs the full `execute_services` arguments dict.
+2. **`_try_parse_tool_call`** (JSON fallback) — handles cases where the model
+   ignores the command format and still outputs JSON.
 
 ---
 
@@ -101,12 +109,16 @@ summary. Two layered defences here:
    irrelevant device statuses ("the bedroom lights remained off, the
    table lights were turned off, …") and invented brightness values.
 
-### Prompt example ordering
+### Prompt format — command-line instead of JSON
 
-Brightness examples FIRST, plain on/off LAST. This was tested both ways
-in round-3: putting plain on/off at the top regressed dim accuracy from
-6/8 to 3/8 without fixing the on/off entity hallucination it was meant to
-address. Brightness-first stays.
+The prompt teaches the model a simple one-line format:
+`ACTION ENTITY [brightness=N]`. Examples are colon-separated
+(request: response). The proxy regex parses this and constructs the full
+`execute_services` JSON. This replaced the previous nested-JSON examples
+after four rounds showed `qwen2.5:1.5b` cannot reliably produce 4-level
+nested JSON (~50 tokens). The command format uses ~15 tokens and
+eliminates wrong-level entity_id, empty lists, and service hallucinations.
+JSON parsing is kept as a fallback.
 
 ### Known unfixable in proxy
 

@@ -929,7 +929,161 @@ class TestInjectToolPrompt(unittest.TestCase):
         with patch.object(proxy, 'PROMPT_CONFIG', self._prompt_config()):
             with patch.object(proxy, 'ARGS', _default_args(max_tokens=120)):
                 out, _ = proxy.inject_tool_prompt(body)
-        self.assertGreaterEqual(_d(out).get('max_tokens', 0), 250)
+        self.assertGreaterEqual(_d(out).get('max_tokens', 0), 80)
+
+
+# ---------------------------------------------------------------------------
+# _try_parse_command_line
+# ---------------------------------------------------------------------------
+
+class TestTryParseCommandLine(unittest.TestCase):
+
+    def test_bare_turn_off(self):
+        result = proxy._try_parse_command_line('turn_off light.office_lights')
+        self.assertIsNotNone(result)
+        fn, args = result
+        self.assertEqual(fn, 'execute_services')
+        item = args['list'][0]
+        self.assertEqual(item['domain'], 'light')
+        self.assertEqual(item['service'], 'turn_off')
+        self.assertEqual(item['service_data']['entity_id'], 'light.office_lights')
+
+    def test_bare_turn_on(self):
+        result = proxy._try_parse_command_line('turn_on light.living_room_lamp_1')
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1]['list'][0]['service'], 'turn_on')
+
+    def test_brightness_parameter(self):
+        result = proxy._try_parse_command_line('turn_on light.x brightness=30')
+        self.assertIsNotNone(result)
+        item = result[1]['list'][0]
+        self.assertEqual(item['service'], 'turn_on')
+        self.assertEqual(item['service_data']['brightness_pct'], 30)
+
+    def test_brightness_over_100_rescaled(self):
+        result = proxy._try_parse_command_line('turn_on light.x brightness=200')
+        self.assertIsNotNone(result)
+        bp = result[1]['list'][0]['service_data']['brightness_pct']
+        self.assertLessEqual(bp, 100)
+        self.assertGreater(bp, 0)
+
+    def test_space_separated_turn_off(self):
+        result = proxy._try_parse_command_line('turn off light.x')
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1]['list'][0]['service'], 'turn_off')
+
+    def test_space_separated_turn_on(self):
+        result = proxy._try_parse_command_line('turn on light.x')
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1]['list'][0]['service'], 'turn_on')
+
+    def test_extra_whitespace(self):
+        result = proxy._try_parse_command_line('  turn_on   light.x   brightness=30  ')
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1]['list'][0]['service_data']['brightness_pct'], 30)
+
+    def test_quoted_entity(self):
+        result = proxy._try_parse_command_line('turn_on "light.x"')
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1]['list'][0]['service_data']['entity_id'], 'light.x')
+
+    def test_prefixed_prose(self):
+        result = proxy._try_parse_command_line('Sure: turn_off light.x')
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1]['list'][0]['service'], 'turn_off')
+
+    def test_markdown_fences_stripped(self):
+        result = proxy._try_parse_command_line('```\nturn_on light.x\n```')
+        self.assertIsNotNone(result)
+
+    def test_plain_prose_returns_none(self):
+        self.assertIsNone(proxy._try_parse_command_line('The lights are on.'))
+
+    def test_question_returns_none(self):
+        self.assertIsNone(proxy._try_parse_command_line('There are 3 lamps.'))
+
+    def test_domain_extracted_from_entity(self):
+        result = proxy._try_parse_command_line('turn_on switch.fan')
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1]['list'][0]['domain'], 'switch')
+
+    def test_brightness_with_turn_off_corrected(self):
+        result = proxy._try_parse_command_line('turn_off light.x brightness=50')
+        self.assertIsNotNone(result)
+        item = result[1]['list'][0]
+        self.assertEqual(item['service'], 'turn_on')
+        self.assertEqual(item['service_data']['brightness_pct'], 50)
+
+    def test_entity_id_cleaned(self):
+        result = proxy._try_parse_command_line('turn_on light.x,Kitchen Light')
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1]['list'][0]['service_data']['entity_id'], 'light.x')
+
+    def test_brightness_alias_level(self):
+        result = proxy._try_parse_command_line('turn_on light.x level=40')
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1]['list'][0]['service_data']['brightness_pct'], 40)
+
+
+# ---------------------------------------------------------------------------
+# _looks_like_command
+# ---------------------------------------------------------------------------
+
+class TestLooksLikeCommand(unittest.TestCase):
+
+    def test_true_for_turn_off_command(self):
+        self.assertTrue(proxy._looks_like_command('turn_off light.office'))
+
+    def test_true_for_turn_on_command(self):
+        self.assertTrue(proxy._looks_like_command('turn_on switch.fan'))
+
+    def test_false_for_plain_prose(self):
+        self.assertFalse(proxy._looks_like_command('The lights are on.'))
+
+    def test_true_when_embedded_in_prose(self):
+        self.assertTrue(proxy._looks_like_command('Sure: turn_off light.x'))
+
+
+# ---------------------------------------------------------------------------
+# rewrite_tool_response — command-line format
+# ---------------------------------------------------------------------------
+
+class TestRewriteToolResponseCommandLine(unittest.TestCase):
+
+    def _response(self, content):
+        return _j({
+            'choices': [{'message': {'role': 'assistant', 'content': content},
+                         'finish_reason': 'stop'}]
+        })
+
+    def test_command_line_rewritten_to_tool_call(self):
+        body = self._response('turn_on light.x')
+        out, status = proxy.rewrite_tool_response(body, known_entities={'light.x'})
+        self.assertEqual(status, 'tool_call')
+        data = _d(out)
+        tc = data['choices'][0]['message']['tool_calls']
+        args = json.loads(tc[0]['function']['arguments'])
+        self.assertEqual(args['list'][0]['service'], 'turn_on')
+        self.assertEqual(args['list'][0]['service_data']['entity_id'], 'light.x')
+
+    def test_command_line_turn_off(self):
+        body = self._response('turn_off light.x')
+        out, status = proxy.rewrite_tool_response(body, known_entities={'light.x'})
+        self.assertEqual(status, 'tool_call')
+        args = json.loads(_d(out)['choices'][0]['message']['tool_calls'][0]['function']['arguments'])
+        self.assertEqual(args['list'][0]['service'], 'turn_off')
+
+    def test_command_line_with_brightness(self):
+        body = self._response('turn_on light.x brightness=50')
+        out, status = proxy.rewrite_tool_response(body, known_entities={'light.x'})
+        self.assertEqual(status, 'tool_call')
+        args = json.loads(_d(out)['choices'][0]['message']['tool_calls'][0]['function']['arguments'])
+        self.assertEqual(args['list'][0]['service_data']['brightness_pct'], 50)
+
+    def test_command_line_invalid_entity_rejected(self):
+        body = self._response('turn_on light.fake')
+        out, status = proxy.rewrite_tool_response(body, known_entities={'light.real'})
+        self.assertEqual(status, 'rejected')
 
 
 if __name__ == '__main__':
