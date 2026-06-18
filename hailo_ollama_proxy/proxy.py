@@ -829,7 +829,7 @@ def _scrub_arguments(args):
 
 
 _COMMAND_LINE_RE = re.compile(
-    r'(turn_on|turn_off)'
+    r'(turn_on|turn_off|dim|set|set_brightness|brighten|darken)'
     r'\s+'
     r'["\']?'
     r'([a-z_]+\.[a-zA-Z0-9_]+)'
@@ -839,7 +839,9 @@ _COMMAND_LINE_RE = re.compile(
     re.MULTILINE,
 )
 
-_COMMAND_LINE_QUICK_RE = re.compile(r'\bturn_(on|off)\s+[a-z_]+\.')
+_COMMAND_LINE_QUICK_RE = re.compile(
+    r'\b(?:turn_(on|off)|dim|set_brightness|brighten|darken)\s+[a-z_]+\.'
+)
 
 
 def _looks_like_command(text):
@@ -877,15 +879,17 @@ def _try_parse_command_line(text):
                 k, v = pair.split('=', 1)
                 if k in ('brightness', 'brightness_pct', 'level',
                          'dim', 'pct', 'value', 'percent'):
-                    try:
+                    v = re.sub(r'[^0-9]', '', v)
+                    if v:
                         bp = int(v)
                         if bp > 100:
                             bp = max(0, min(100, round(bp * 100 / 255)))
                         service_data['brightness_pct'] = bp
-                    except ValueError:
-                        pass
 
+    # Normalize brightness-related actions to turn_on
     service = action
+    if service in ('dim', 'set', 'set_brightness', 'brighten', 'darken'):
+        service = 'turn_on'
     if 'brightness_pct' in service_data and service == 'turn_off':
         service = 'turn_on'
 
@@ -1086,7 +1090,31 @@ def _looks_like_json(text):
     return '```' in text or '"execute_services"' in text or '"service_data"' in text
 
 
-def rewrite_tool_response(body_bytes, known_entities=None):
+_USER_BRIGHTNESS_RE = re.compile(
+    r'(?:brightness|dim|dimm|bright)\w*'
+    r'.*?(\d{1,3})\s*%',
+    re.IGNORECASE,
+)
+
+
+def _extract_user_brightness(user_text):
+    """Extract a brightness percentage from the user's spoken request.
+
+    Returns an int 1-100, or None if no brightness intent is found.
+    Handles patterns like "dim to 80%", "brightness to 50 percent",
+    "dimm it to 100% percent".
+    """
+    if not user_text:
+        return None
+    m = _USER_BRIGHTNESS_RE.search(user_text)
+    if m:
+        val = int(m.group(1))
+        if 1 <= val <= 100:
+            return val
+    return None
+
+
+def rewrite_tool_response(body_bytes, known_entities=None, user_text=None):
     """hailo-tools-v1 (response side)
 
     hailo-ollama returns the model output as plain text in message.content.
@@ -1151,6 +1179,21 @@ def rewrite_tool_response(body_bytes, known_entities=None):
             sys.stderr.write('[proxy] unknown function {!r} — only execute_services is supported\n'
                              .format(fn_name))
         elif _validate_tool_arguments(fn_name, arguments, known_entities):
+            # If the user asked for a brightness change but the model forgot
+            # to include it, extract from user text and inject.
+            if user_text and fn_name == 'execute_services':
+                user_bp = _extract_user_brightness(user_text)
+                if user_bp is not None:
+                    for item in arguments.get('list', []):
+                        sd = item.get('service_data', {})
+                        if 'brightness_pct' not in sd:
+                            sd['brightness_pct'] = user_bp
+                            item['service_data'] = sd
+                            if item.get('service') == 'turn_off':
+                                item['service'] = 'turn_on'
+                            sys.stderr.write(
+                                '[proxy] injected brightness_pct={} from user text\n'
+                                .format(user_bp))
             choice['message'] = {
                 'role': 'assistant',
                 'content': None,
@@ -1313,6 +1356,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body   = self.rfile.read(length) if length > 0 else None
         tool_mode = False  # False | True | 'followup'
         known_entities = None
+        user_text = None
         if body and self.headers.get('Content-Type', '').startswith('application/json'):
             body = fix_json_control_chars(body)
             body, tool_mode = inject_tool_prompt(body)       # extract tools, inject prompt
@@ -1320,6 +1364,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # Snapshot the entity allowlist before sanitisation strips
                 # newlines / dedupes content; only used for tool turns.
                 known_entities = extract_known_entities(body)
+                try:
+                    _msgs = json.loads(body.decode('utf-8')).get('messages', [])
+                    for _m in reversed(_msgs):
+                        if _m.get('role') == 'user' and _m.get('content'):
+                            user_text = _m['content']
+                            break
+                except Exception:
+                    pass
                 if known_entities and ARGS.log_level != 'info':
                     light_ents = sorted(e for e in known_entities if e.startswith('light.'))
                     sys.stderr.write('[proxy] known entities ({} total, {} lights): {}\n'.format(
@@ -1333,7 +1385,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             content_type = headers.get('Content-Type', 'application/octet-stream')
 
             if tool_mode is True:
-                resp_body, rewrite_status = rewrite_tool_response(resp_body, known_entities)
+                resp_body, rewrite_status = rewrite_tool_response(
+                    resp_body, known_entities, user_text=user_text)
                 # On rejection (validation failed → JSON blanked), take one more shot
                 # with bumped sampling. The first failure is often a deterministic
                 # mistake (e.g. always picking the same hallucinated entity_id) that
@@ -1345,7 +1398,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     retry_body = perturb_for_retry(body)
                     try:
                         _, _, retry_resp = self._send_to_backend(retry_body, label='retry')
-                        retry_resp, retry_status = rewrite_tool_response(retry_resp, known_entities)
+                        retry_resp, retry_status = rewrite_tool_response(
+                            retry_resp, known_entities, user_text=user_text)
                         sys.stderr.write(
                             '[proxy] retry status: {}\n'.format(retry_status)
                         )

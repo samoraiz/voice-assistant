@@ -1159,6 +1159,78 @@ class TestRewriteToolResponseCommandLine(unittest.TestCase):
         out, status = proxy.rewrite_tool_response(body, known_entities={'light.real'})
         self.assertEqual(status, 'rejected')
 
+    def test_dim_action_parsed_as_turn_on(self):
+        body = self._response('dim light.x brightness=50')
+        out, status = proxy.rewrite_tool_response(body, known_entities={'light.x'})
+        self.assertEqual(status, 'tool_call')
+        args = json.loads(_d(out)['choices'][0]['message']['tool_calls'][0]['function']['arguments'])
+        self.assertEqual(args['list'][0]['service'], 'turn_on')
+        self.assertEqual(args['list'][0]['service_data']['brightness_pct'], 50)
+
+    def test_brightness_percent_sign_stripped(self):
+        body = self._response('turn_on light.x brightness=80%')
+        out, status = proxy.rewrite_tool_response(body, known_entities={'light.x'})
+        self.assertEqual(status, 'tool_call')
+        args = json.loads(_d(out)['choices'][0]['message']['tool_calls'][0]['function']['arguments'])
+        self.assertEqual(args['list'][0]['service_data']['brightness_pct'], 80)
+
+    def test_user_brightness_injected_when_model_omits(self):
+        body = self._response('turn_on light.x')
+        out, status = proxy.rewrite_tool_response(
+            body, known_entities={'light.x'}, user_text='dim it to 80%')
+        self.assertEqual(status, 'tool_call')
+        args = json.loads(_d(out)['choices'][0]['message']['tool_calls'][0]['function']['arguments'])
+        self.assertEqual(args['list'][0]['service_data']['brightness_pct'], 80)
+        self.assertEqual(args['list'][0]['service'], 'turn_on')
+
+    def test_user_brightness_not_injected_when_model_includes(self):
+        body = self._response('turn_on light.x brightness=50')
+        out, status = proxy.rewrite_tool_response(
+            body, known_entities={'light.x'}, user_text='dim it to 80%')
+        self.assertEqual(status, 'tool_call')
+        args = json.loads(_d(out)['choices'][0]['message']['tool_calls'][0]['function']['arguments'])
+        self.assertEqual(args['list'][0]['service_data']['brightness_pct'], 50)
+
+    def test_user_brightness_not_injected_for_plain_turn_on(self):
+        """No brightness injection when user didn't ask for brightness."""
+        body = self._response('turn_on light.x')
+        out, status = proxy.rewrite_tool_response(
+            body, known_entities={'light.x'}, user_text='turn on lamp 1')
+        self.assertEqual(status, 'tool_call')
+        args = json.loads(_d(out)['choices'][0]['message']['tool_calls'][0]['function']['arguments'])
+        self.assertNotIn('brightness_pct', args['list'][0]['service_data'])
+
+
+# ---------------------------------------------------------------------------
+# _extract_user_brightness
+# ---------------------------------------------------------------------------
+
+class TestExtractUserBrightness(unittest.TestCase):
+
+    def test_dim_to_percent(self):
+        self.assertEqual(proxy._extract_user_brightness('dim it to 80%'), 80)
+
+    def test_dimm_to_percent(self):
+        self.assertEqual(proxy._extract_user_brightness('dimm it to 50%'), 50)
+
+    def test_brightness_to_percent(self):
+        self.assertEqual(proxy._extract_user_brightness('brightness to 30%'), 30)
+
+    def test_dim_back_to_percent(self):
+        self.assertEqual(proxy._extract_user_brightness('dim it back to 10%'), 10)
+
+    def test_no_brightness_keyword(self):
+        self.assertIsNone(proxy._extract_user_brightness('turn on lamp 1'))
+
+    def test_no_percent(self):
+        self.assertIsNone(proxy._extract_user_brightness('turn it on'))
+
+    def test_over_100_rejected(self):
+        self.assertIsNone(proxy._extract_user_brightness('dim to 150%'))
+
+    def test_zero_rejected(self):
+        self.assertIsNone(proxy._extract_user_brightness('dim to 0%'))
+
 
 if __name__ == '__main__':
     unittest.main()
