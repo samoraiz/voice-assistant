@@ -1212,6 +1212,45 @@ class TestPruneConversationHistory(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# strip_think_blocks
+# ---------------------------------------------------------------------------
+
+class TestStripThinkBlocks(unittest.TestCase):
+
+    def _response(self, content):
+        return _j({
+            'choices': [{'message': {'role': 'assistant', 'content': content},
+                         'finish_reason': 'stop'}]
+        })
+
+    def test_strips_think_block(self):
+        body = self._response('<think>reasoning here</think>turn_on light.x')
+        result = proxy.strip_think_blocks(body)
+        data = _d(result)
+        self.assertEqual(data['choices'][0]['message']['content'], 'turn_on light.x')
+
+    def test_strips_multiline_think_block(self):
+        body = self._response('<think>\nI should turn on the light.\nLet me think...\n</think>\nturn_on light.x brightness=80')
+        result = proxy.strip_think_blocks(body)
+        data = _d(result)
+        self.assertEqual(data['choices'][0]['message']['content'], 'turn_on light.x brightness=80')
+
+    def test_no_think_block_unchanged(self):
+        body = self._response('turn_on light.x')
+        self.assertEqual(proxy.strip_think_blocks(body), body)
+
+    def test_empty_think_block(self):
+        body = self._response('<think></think>The lamp is on.')
+        result = proxy.strip_think_blocks(body)
+        data = _d(result)
+        self.assertEqual(data['choices'][0]['message']['content'], 'The lamp is on.')
+
+    def test_invalid_json_passthrough(self):
+        body = b'not json'
+        self.assertEqual(proxy.strip_think_blocks(body), body)
+
+
+# ---------------------------------------------------------------------------
 # _looks_like_command
 # ---------------------------------------------------------------------------
 

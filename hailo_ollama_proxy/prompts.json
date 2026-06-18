@@ -1,7 +1,7 @@
 {
   "example": "turn off the lights: turn_off light.office_lights | dim to 30%: turn_on light.office_lights brightness=30 | open the blinds: open cover.bedroom_blinds | close the shades: close cover.bedroom_blinds | turn on the fan: turn_on switch.fan | how many lamps?: I found 2 lamps in your home.",
 
-  "instruction_template": " When the user wants to control a device, reply with ONLY a command line. Do NOT use JSON. Do NOT explain. Format: ACTION ENTITY [PARAM=N]. Actions: turn_on, turn_off, open, close. Examples: {example}",
+  "instruction_template": " /no_think When the user wants to control a device, reply with ONLY a command line. Do NOT use JSON. Do NOT explain. Format: ACTION ENTITY [PARAM=N]. Actions: turn_on, turn_off, open, close. Examples: {example}",
 
   "followup_hint": " The previous tool call already executed. Reply with one short sentence about what happened."
 }

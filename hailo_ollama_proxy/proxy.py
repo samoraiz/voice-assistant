@@ -1350,6 +1350,37 @@ def perturb_for_retry(body_bytes, temperature=0.7, top_p=0.95):
 _SENTENCE_END_RE = re.compile(r'([.!?])\s+(?=[A-Z])')
 
 
+_THINK_RE = re.compile(r'<think>.*?</think>\s*', re.DOTALL)
+
+
+def strip_think_blocks(body_bytes):
+    """Remove qwen3-style <think>…</think> blocks from model output.
+
+    qwen3 emits a reasoning block before the actual answer. These waste
+    tokens and must never be spoken by TTS or parsed as a command.
+    """
+    try:
+        resp = json.loads(body_bytes.decode('utf-8'))
+    except Exception:
+        return body_bytes
+    choices = resp.get('choices', [])
+    if not choices:
+        return body_bytes
+    message = choices[0].get('message', {})
+    content = message.get('content')
+    if not isinstance(content, str) or '<think>' not in content:
+        return body_bytes
+    cleaned = _THINK_RE.sub('', content)
+    if cleaned != content:
+        sys.stderr.write('[proxy] stripped <think> block ({} → {} chars)\n'
+                         .format(len(content), len(cleaned)))
+        message['content'] = cleaned
+        choices[0]['message'] = message
+        resp['choices'] = choices
+        return json.dumps(resp).encode('utf-8')
+    return body_bytes
+
+
 def truncate_followup_response(body_bytes):
     """Clean up the assistant reply on tool-result follow-up turns.
 
@@ -1476,6 +1507,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             status, headers, resp_body = self._send_to_backend(body, label='')
             content_type = headers.get('Content-Type', 'application/octet-stream')
+            resp_body = strip_think_blocks(resp_body)
 
             if tool_mode is True:
                 resp_body, rewrite_status = rewrite_tool_response(
@@ -1491,6 +1523,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     retry_body = perturb_for_retry(body)
                     try:
                         _, _, retry_resp = self._send_to_backend(retry_body, label='retry')
+                        retry_resp = strip_think_blocks(retry_resp)
                         retry_resp, retry_status = rewrite_tool_response(
                             retry_resp, known_entities, user_text=user_text)
                         sys.stderr.write(
