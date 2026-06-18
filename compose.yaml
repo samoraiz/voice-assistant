@@ -18,6 +18,7 @@ services:
   # entity allowlist — do NOT point HA directly at the native binary.
   hailo-ollama:
     container_name: hailo-ollama
+    build: ./hailo_ollama_proxy
     image: canthefason/hailo-ollama:latest
     restart: unless-stopped
     privileged: true
