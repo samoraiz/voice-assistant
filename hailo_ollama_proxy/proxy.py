@@ -1496,9 +1496,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         sys.stderr.write(
                             '[proxy] retry status: {}\n'.format(retry_status)
                         )
-                        # Use whatever the retry produced — even if also rejected,
-                        # the second blank is still better than the first's raw JSON.
-                        resp_body = retry_resp
+                        # Only use the retry if it produced a valid tool call or
+                        # at least another structured attempt (rejected → blanked).
+                        # pass_through means the retry gave up and output prose
+                        # ("I can't help with that…") — silence from the first
+                        # attempt's blank is better than TTS reading that aloud.
+                        if retry_status != 'pass_through':
+                            resp_body = retry_resp
                     except Exception as exc:
                         sys.stderr.write('[proxy] retry forward error: ' + str(exc) + '\n')
                         # Keep the first-attempt rejected (blanked) body as fallback.
