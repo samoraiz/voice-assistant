@@ -606,6 +606,80 @@ class TestValidateToolArguments(unittest.TestCase):
     def test_non_execute_services_always_returns_true(self):
         self.assertTrue(proxy._validate_tool_arguments('other_fn', {}))
 
+    def test_fuzzy_match_corrects_entity_in_place(self):
+        """Hallucinated entity close to a known one should be corrected."""
+        known = {'light.living_room_lamp_1', 'light.office_lights'}
+        args = self._args(entity='light.living_room_lamps_2')
+        result = proxy._validate_tool_arguments('execute_services', args, known)
+        self.assertTrue(result)
+        self.assertEqual(
+            args['list'][0]['service_data']['entity_id'],
+            'light.living_room_lamp_1',
+        )
+
+    def test_fuzzy_match_no_match_still_rejects(self):
+        known = {'light.office_lights', 'light.kitchen_lamp'}
+        self.assertFalse(proxy._validate_tool_arguments(
+            'execute_services',
+            self._args(entity='light.completely_different_thing'),
+            known,
+        ))
+
+
+# ---------------------------------------------------------------------------
+# _fuzzy_match_entity
+# ---------------------------------------------------------------------------
+
+class TestFuzzyMatchEntity(unittest.TestCase):
+
+    KNOWN = {
+        'light.living_room_lamp_1',
+        'light.office_lights',
+        'light.wohnzimmer_1_lamp_1',
+    }
+
+    def test_exact_match_not_needed(self):
+        """_fuzzy_match_entity is called when exact match already failed,
+        but should still return a close match."""
+        self.assertEqual(
+            proxy._fuzzy_match_entity('light.living_room_lamps_2', self.KNOWN),
+            'light.living_room_lamp_1',
+        )
+
+    def test_no_match_returns_none(self):
+        self.assertIsNone(
+            proxy._fuzzy_match_entity('light.totally_unknown_device', self.KNOWN)
+        )
+
+    def test_wrong_domain_returns_none(self):
+        self.assertIsNone(
+            proxy._fuzzy_match_entity('switch.living_room_lamp_1', self.KNOWN)
+        )
+
+    def test_no_dot_returns_none(self):
+        self.assertIsNone(proxy._fuzzy_match_entity('nodot', self.KNOWN))
+
+    def test_ambiguous_returns_none(self):
+        """Two equally good candidates → None (ambiguous)."""
+        known = {'light.room_a_lamp', 'light.room_b_lamp'}
+        self.assertIsNone(
+            proxy._fuzzy_match_entity('light.room_c_lamp', known)
+        )
+
+    def test_plural_and_number_tolerance(self):
+        known = {'light.guest_room_stand_light'}
+        self.assertEqual(
+            proxy._fuzzy_match_entity('light.guest_room_stand_lights', known),
+            'light.guest_room_stand_light',
+        )
+
+    def test_office_shortname(self):
+        """Model emits 'light.office' instead of 'light.office_lights'."""
+        self.assertEqual(
+            proxy._fuzzy_match_entity('light.office', self.KNOWN),
+            'light.office_lights',
+        )
+
 
 # ---------------------------------------------------------------------------
 # _looks_like_json

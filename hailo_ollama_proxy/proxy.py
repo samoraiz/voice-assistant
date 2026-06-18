@@ -970,6 +970,61 @@ def _try_parse_tool_call(text):
     return None
 
 
+def _entity_tokens(object_id):
+    """Normalize an entity object_id into comparable tokens.
+
+    Drops pure-digit tokens (indices the model gets wrong) and strips
+    trailing 's' for simple plural handling (lamps → lamp).
+    """
+    tokens = set()
+    for t in object_id.lower().split('_'):
+        if t.isdigit():
+            continue
+        if len(t) > 1 and t.endswith('s'):
+            t = t[:-1]
+        tokens.add(t)
+    return tokens
+
+
+def _fuzzy_match_entity(entity_id, known_entities):
+    """Try to match a hallucinated entity_id to a known one in the same domain.
+
+    Returns the matched entity_id if exactly one candidate scores >= 0.5,
+    or None if zero or multiple candidates match (ambiguous).
+    """
+    if '.' not in entity_id:
+        return None
+    domain, obj = entity_id.split('.', 1)
+    candidates = [e for e in known_entities if e.startswith(domain + '.')]
+    if not candidates:
+        return None
+
+    query_tokens = _entity_tokens(obj)
+    if not query_tokens:
+        return None
+
+    best_score = 0.0
+    best = None
+    ambiguous = False
+
+    for cand in candidates:
+        cand_tokens = _entity_tokens(cand.split('.', 1)[1])
+        union = query_tokens | cand_tokens
+        if not union:
+            continue
+        score = len(query_tokens & cand_tokens) / len(union)
+        if score > best_score:
+            best_score = score
+            best = cand
+            ambiguous = False
+        elif score == best_score and score >= 0.5:
+            ambiguous = True
+
+    if ambiguous or best_score < 0.5:
+        return None
+    return best
+
+
 def _validate_tool_arguments(fn_name, arguments, known_entities=None):
     """Return True if the tool call arguments look actionable.
 
@@ -1001,15 +1056,23 @@ def _validate_tool_arguments(fn_name, arguments, known_entities=None):
             if not entity_id:
                 return False
             if known_entities is not None and entity_id not in known_entities:
-                domain = entity_id.split('.')[0] if '.' in entity_id else ''
-                same_domain = sorted(e for e in known_entities if e.startswith(domain + '.'))
-                sys.stderr.write(
-                    '[proxy] entity_id {!r} not in HA exposed list — rejecting'
-                    ' (known {}.* entities: {})\n'
-                    .format(entity_id, domain,
-                            ', '.join(same_domain) if same_domain else 'none')
-                )
-                return False
+                corrected = _fuzzy_match_entity(entity_id, known_entities)
+                if corrected:
+                    sys.stderr.write(
+                        '[proxy] fuzzy-matched {!r} → {!r}\n'
+                        .format(entity_id, corrected))
+                    svc_data['entity_id'] = corrected
+                    item['service_data'] = svc_data
+                else:
+                    domain = entity_id.split('.')[0] if '.' in entity_id else ''
+                    same_domain = sorted(e for e in known_entities if e.startswith(domain + '.'))
+                    sys.stderr.write(
+                        '[proxy] entity_id {!r} not in HA exposed list — rejecting'
+                        ' (known {}.* entities: {})\n'
+                        .format(entity_id, domain,
+                                ', '.join(same_domain) if same_domain else 'none')
+                    )
+                    return False
     return True
 
 
