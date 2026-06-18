@@ -1001,9 +1001,13 @@ def _validate_tool_arguments(fn_name, arguments, known_entities=None):
             if not entity_id:
                 return False
             if known_entities is not None and entity_id not in known_entities:
+                domain = entity_id.split('.')[0] if '.' in entity_id else ''
+                same_domain = sorted(e for e in known_entities if e.startswith(domain + '.'))
                 sys.stderr.write(
-                    '[proxy] entity_id {!r} not in HA exposed list — rejecting tool call\n'
-                    .format(entity_id)
+                    '[proxy] entity_id {!r} not in HA exposed list — rejecting'
+                    ' (known {}.* entities: {})\n'
+                    .format(entity_id, domain,
+                            ', '.join(same_domain) if same_domain else 'none')
                 )
                 return False
     return True
@@ -1253,6 +1257,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # Snapshot the entity allowlist before sanitisation strips
                 # newlines / dedupes content; only used for tool turns.
                 known_entities = extract_known_entities(body)
+                if known_entities and ARGS.log_level != 'info':
+                    light_ents = sorted(e for e in known_entities if e.startswith('light.'))
+                    sys.stderr.write('[proxy] known entities ({} total, {} lights): {}\n'.format(
+                        len(known_entities), len(light_ents),
+                        ' '.join(light_ents[:10]) + (' ...' if len(light_ents) > 10 else '')))
             body = sanitize_conversation_roles(body)         # fix null content / tool roles
             body = sanitize_for_hailo(body)                  # collapse newlines
             body = inject_defaults(body, self.path)
