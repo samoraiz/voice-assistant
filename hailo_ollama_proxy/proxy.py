@@ -94,12 +94,18 @@ def _parse_args():
                         'Defaults to prompts.json next to this script. '
                         'Missing keys → no injection. (env: PROXY_CONFIG)')
     # Inference caps
-    p.add_argument('--max-tokens', type=int, default=120,
-                   help='Hard cap on max_tokens for /v1/chat/completions')
-    p.add_argument('--num-predict', type=int, default=60,
-                   help='Hard cap on num_predict for /api/generate and /api/chat')
-    p.add_argument('--num-ctx', type=int, default=1024,
-                   help='Context window size injected into all paths')
+    p.add_argument('--max-tokens', type=int,
+                   default=int(os.environ.get('OLLAMA_PROXY_MAX_TOKENS', '120')),
+                   help='Hard cap on max_tokens for /v1/chat/completions '
+                        '(env: OLLAMA_PROXY_MAX_TOKENS)')
+    p.add_argument('--num-predict', type=int,
+                   default=int(os.environ.get('OLLAMA_PROXY_NUM_PREDICT', '60')),
+                   help='Hard cap on num_predict for /api/generate and /api/chat '
+                        '(env: OLLAMA_PROXY_NUM_PREDICT)')
+    p.add_argument('--num-ctx', type=int,
+                   default=int(os.environ.get('OLLAMA_PROXY_NUM_CTX', '2048')),
+                   help='Context window size injected into all paths '
+                        '(env: OLLAMA_PROXY_NUM_CTX)')
     # Optional quality knobs — only injected when explicitly set
     p.add_argument('--temperature', type=float, default=None,
                    help='Sampling temperature to inject (e.g. 0.1). '
@@ -947,6 +953,10 @@ def rewrite_tool_response(body_bytes, known_entities=None):
         if not fn_name or not isinstance(fn_name, str) or fn_name.lower() == 'none':
             # Model emitted JSON but with null/placeholder function name — blank it.
             sys.stderr.write('[proxy] suppressed tool call with invalid function name: {!r}\n'
+                             .format(fn_name))
+        elif fn_name != 'execute_services':
+            # Model hallucinated an unknown function (e.g. "home_assistant") — blank it.
+            sys.stderr.write('[proxy] unknown function {!r} — only execute_services is supported\n'
                              .format(fn_name))
         elif _validate_tool_arguments(fn_name, arguments, known_entities):
             choice['message'] = {

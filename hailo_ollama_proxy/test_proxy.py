@@ -675,6 +675,17 @@ class TestRewriteToolResponse(unittest.TestCase):
         self.assertEqual(status, 'rejected')
         self.assertEqual(_d(out)['choices'][0]['message']['content'], '')
 
+    def test_unknown_function_name_blanked(self):
+        # Model hallucinates a function name like "home_assistant"
+        content = json.dumps({'name': 'home_assistant',
+                              'arguments': {'list': [{'domain': 'light',
+                                                      'service': 'turn_on',
+                                                      'service_data': {'entity_id': 'light.x'}}]}})
+        body = self._response(content)
+        out, status = proxy.rewrite_tool_response(body, known_entities={'light.x'})
+        self.assertEqual(status, 'rejected')
+        self.assertEqual(_d(out)['choices'][0]['message']['content'], '')
+
     def test_execute_service_singular_normalized(self):
         # Model sometimes emits execute_service (no trailing s) — proxy must fix it
         content = json.dumps({

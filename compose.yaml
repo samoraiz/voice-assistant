@@ -29,9 +29,9 @@ services:
       - HAILO_OLLAMA_VDEVICE_GROUP_ID=SHARED
       - XDG_DATA_HOME=/usr/local/share
       - LD_LIBRARY_PATH=/usr/lib
-      # - OLLAMA_PROXY_NUM_CTX=1024
-      # - OLLAMA_PROXY_NUM_PREDICT=60
-      # - OLLAMA_PROXY_MAX_TOKENS=120
+      - OLLAMA_PROXY_NUM_CTX=2048       # increase if follow-up turns lose device context
+      # - OLLAMA_PROXY_NUM_PREDICT=60   # hard cap for native Ollama endpoints (default 60)
+      # - OLLAMA_PROXY_MAX_TOKENS=120   # hard cap on response length (default 120)
     volumes:
       # Model storage — two host dirs created by the package install:
       #   /usr/share/hailo-ollama/  manifests  (copy to hailoollama/ once after install)
